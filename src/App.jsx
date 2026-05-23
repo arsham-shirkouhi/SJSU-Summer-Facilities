@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Inventory from './pages/Inventory'
+import AdminTodos from './pages/AdminTodos'
 
 function AppRoutes() {
   return (
@@ -24,6 +25,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Inventory />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin-todos"
+        element={
+          <ProtectedRoute>
+            <AdminTodos />
           </ProtectedRoute>
         }
       />

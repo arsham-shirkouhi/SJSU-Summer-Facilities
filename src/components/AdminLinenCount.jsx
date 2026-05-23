@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { formatDistanceToNowStrict } from 'date-fns'
+import { format, formatDistanceToNowStrict } from 'date-fns'
+import { ArrowUpRight } from 'lucide-react'
 import { supabase } from '../supabase'
 import { SETTINGS } from '../config/settings'
-import { getLinenCountByRoom } from '../lib/queries'
+import { getLinenCountByRoom, getStorageRooms } from '../lib/queries'
 
 function normalizeRows(rows) {
   return (rows || []).reduce(
@@ -12,13 +13,16 @@ function normalizeRows(rows) {
       const count = Number(row?.current_balance || 0)
       if (!roomName || !itemLabel) return acc
       if (!acc.rooms[roomName]) {
-        acc.rooms[roomName] = { total: 0 }
+        acc.rooms[roomName] = { total: 0, latestUpdate: null }
       }
       acc.rooms[roomName][itemLabel] = (acc.rooms[roomName][itemLabel] || 0) + count
       acc.rooms[roomName].total += count
 
       const updated = row?.updated_at ? new Date(row.updated_at) : null
       if (updated && (!acc.latestUpdate || updated > acc.latestUpdate)) acc.latestUpdate = updated
+      if (updated && (!acc.rooms[roomName].latestUpdate || updated > acc.rooms[roomName].latestUpdate)) {
+        acc.rooms[roomName].latestUpdate = updated
+      }
       return acc
     },
     { rooms: {}, latestUpdate: null },
@@ -28,11 +32,14 @@ function normalizeRows(rows) {
 export default function AdminLinenCount() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
+  const [storageRooms, setStorageRooms] = useState([])
 
   const refetch = async () => {
     try {
       setLoading(true)
-      setRows(await getLinenCountByRoom())
+      const [linenRows, rooms] = await Promise.all([getLinenCountByRoom(), getStorageRooms()])
+      setRows(linenRows)
+      setStorageRooms((rooms || []).map((room) => room.name).filter(Boolean))
     } finally {
       setLoading(false)
     }
@@ -48,8 +55,10 @@ export default function AdminLinenCount() {
   }, [])
 
   const normalized = useMemo(() => normalizeRows(rows), [rows])
-  const roomNames = SETTINGS.storageRooms || []
-  const itemLabels = (SETTINGS.itemTypes || []).map((item) => item.label)
+  const roomNames = useMemo(() => {
+    if (storageRooms.length) return storageRooms
+    return SETTINGS.storageRooms || []
+  }, [storageRooms])
   const updatedText = normalized.latestUpdate
     ? `UPDATED ${formatDistanceToNowStrict(normalized.latestUpdate, { addSuffix: true }).toUpperCase()}`
     : 'UPDATED JUST NOW'
@@ -63,37 +72,37 @@ export default function AdminLinenCount() {
         <p className="mono text-[10px] text-[#6B6B6B]">{updatedText}</p>
       </div>
       {loading ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: Math.max(roomNames.length, 3) }).map((_, idx) => (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: Math.max(roomNames.length, 5) }).map((_, idx) => (
             <div key={idx} className="brutal-card bg-white p-4">
               <div className="skeleton mb-2 h-5 w-32" />
-              {Array.from({ length: itemLabels.length || 5 }).map((__, rowIdx) => (
-                <div key={rowIdx} className="skeleton mb-1.5 h-4 w-full" />
-              ))}
+              <div className="skeleton h-7 w-20" />
             </div>
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
           {roomNames.map((roomName) => {
-            const room = normalized.rooms[roomName] || { total: 0 }
+            const room = normalized.rooms[roomName] || { total: 0, latestUpdate: null }
             return (
-              <div key={roomName} className="brutal-card bg-white p-4">
-                <div className="mb-2 flex items-start justify-between gap-2">
-                  <p className="text-[14px] font-extrabold uppercase">{roomName}</p>
-                  <p className="mono text-[22px] font-bold">{room.total}</p>
+              <div
+                key={roomName}
+                className="group brutal-card bg-white p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_5px_0_#0A0A0A] active:translate-y-0.5 active:shadow-[2px_2px_0_#0A0A0A]"
+              >
+                <div className="mb-1 flex items-start justify-between gap-2">
+                  <p className="text-[12px] font-extrabold uppercase">{roomName}</p>
+                  <ArrowUpRight
+                    size={16}
+                    className="text-ink transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                  />
                 </div>
-                <div className="mb-2 border-t-[1.5px] border-[#E8E4DC]" />
-                <div>
-                  {itemLabels.map((label) => (
-                    <div key={label} className="flex items-center justify-between border-b border-[#F5F0E8] py-1.5">
-                      <span className="text-[13px] font-medium">{label}</span>
-                      <span className="mono text-[14px] font-bold">{Number(room[label] || 0)}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-2 border-t-2 border-ink pt-2">
-                  <p className="mono text-[12px] font-bold uppercase">TOTAL: {room.total} BUNDLES</p>
+                <p className="mono text-[30px] font-bold">{room.total}</p>
+                <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Bundles</p>
+                <div className="mt-2 border-t-[1.5px] border-[#E8E4DC] pt-2">
+                  <p className="mono text-[11px] font-bold text-[#6B6B6B]">
+                    LAST COUNT UPDATE:{' '}
+                    {room.latestUpdate ? format(room.latestUpdate, 'MMM d, yyyy h:mm a') : 'NO UPDATE YET'}
+                  </p>
                 </div>
               </div>
             )

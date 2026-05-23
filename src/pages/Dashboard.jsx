@@ -18,10 +18,9 @@ import TopBar from '../components/TopBar'
 import BottomNav from '../components/BottomNav'
 import LaundryLoadCard from '../components/LaundryLoadCard'
 import NewLoadModal from '../components/NewLoadModal'
-import AdminTodoSection from '../components/AdminTodoSection'
+import AdminTodoSummary from '../components/AdminTodoSummary'
 import AdminPickupCalendar from '../components/AdminPickupCalendar'
 import AdminLinenCount from '../components/AdminLinenCount'
-import AdminLaundrySection from '../components/AdminLaundrySection'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../supabase'
 import { SETTINGS } from '../config/settings'
@@ -376,6 +375,7 @@ function StaffDashboard({ user, profile }) {
 }
 
 function AdminDashboard({ user, profile }) {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [shiftNote, setShiftNote] = useState(null)
   const [pickup, setPickup] = useState(null)
@@ -444,9 +444,8 @@ function AdminDashboard({ user, profile }) {
 
       <PickupBanner pickup={pickup} pickupError={pickupError} onRetry={loadAdminPanels} />
 
+      <AdminTodoSummary onOpenDetail={() => navigate('/admin-todos')} />
       <AdminLinenCount />
-      <AdminLaundrySection />
-      <AdminTodoSection />
       <AdminPickupCalendar />
 
       {error ? <ErrorBlock message={error} onRetry={loadAdminPanels} /> : null}

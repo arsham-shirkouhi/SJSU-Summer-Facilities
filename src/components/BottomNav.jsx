@@ -19,9 +19,9 @@ const staffTabs = [
 
 const adminTabs = [
   { label: 'Overview', icon: LayoutDashboard, to: '/dashboard' },
+  { label: 'Todos', icon: CheckSquare, to: '/admin-todos' },
   { label: 'Staff', icon: Users, to: '/dashboard#staff' },
   { label: 'Inventory', icon: Package, to: '/inventory' },
-  { label: 'Laundry', icon: Waves, to: '/dashboard#laundry' },
   { label: 'Reports', icon: BarChart2, to: '/dashboard#reports' },
 ]
 
