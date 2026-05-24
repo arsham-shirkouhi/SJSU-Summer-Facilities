@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { format } from 'date-fns'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Navigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
@@ -15,12 +15,18 @@ const COLUMN_CONFIG = [
   { key: 'complete', label: 'COMPLETED', border: 'border-l-primary' },
 ]
 
+const PRIORITY_STYLES = {
+  low: { label: 'LOW', className: 'bg-[#E8E4DC] text-[#3D3D3D]' },
+  medium: { label: 'MED', className: 'bg-amber-light text-[#7A4A00]' },
+  high: { label: 'HIGH', className: 'bg-danger text-white' },
+}
+
 export default function AdminTodos() {
   const { user, profile } = useAuth()
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddTask, setShowAddTask] = useState(false)
-  const [newTask, setNewTask] = useState({ title: '', details: '', is_priority: false })
+  const [newTask, setNewTask] = useState({ title: '', details: '', priority: 'medium' })
   const [draggingTaskId, setDraggingTaskId] = useState(null)
   const [dragOriginStatus, setDragOriginStatus] = useState(null)
   const [dragOverStatus, setDragOverStatus] = useState(null)
@@ -30,7 +36,9 @@ export default function AdminTodos() {
   const dropHandledRef = useRef(false)
 
   const normalizedRole = String(profile?.role || '').trim().toLowerCase()
-  if (normalizedRole !== 'admin') return <Navigate to="/dashboard" replace />
+  const isAdmin = normalizedRole === 'admin'
+  const isStaff = normalizedRole === 'staff'
+  if (!isAdmin && !isStaff) return <Navigate to="/dashboard" replace />
 
   const refetchTasks = async () => {
     try {
@@ -79,7 +87,7 @@ export default function AdminTodos() {
     if (!fromStatus || fromStatus === status) return
     try {
       await updateTaskStatus(taskId, status)
-      toast.success('Task moved')
+      toast.success('Task status saved')
     } catch (error) {
       setTasks((current) =>
         current.map((task) => (task.id === taskId ? { ...task, status: fromStatus } : task)),
@@ -96,12 +104,13 @@ export default function AdminTodos() {
         details: newTask.details || null,
         assigned_date: format(new Date(), 'yyyy-MM-dd'),
         status: 'pending',
-        is_priority: newTask.is_priority,
+        priority: newTask.priority,
+        is_priority: newTask.priority === 'high',
         creator_name: profile?.full_name || user?.email || 'Admin',
         created_by: user?.id || null,
       })
       setTasks((current) => [created, ...current])
-      setNewTask({ title: '', details: '', is_priority: false })
+      setNewTask({ title: '', details: '', priority: 'medium' })
       setShowAddTask(false)
       toast.success('Task added')
     } catch (error) {
@@ -127,46 +136,22 @@ export default function AdminTodos() {
       <main className="mx-auto min-h-screen w-full max-w-[1200px] bg-cream px-4 pb-20 pt-16 sm:px-6 md:px-8">
         <div className="mb-4 flex items-center justify-between border-b-[3px] border-ink pb-3">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Admin</p>
+            <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">
+              {isAdmin ? 'Admin' : 'Staff'}
+            </p>
             <h2 className="text-[24px] font-extrabold">Todo Board</h2>
           </div>
-          <button
-            type="button"
-            className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px] text-primary"
-            onClick={() => setShowAddTask((open) => !open)}
-          >
-            <Plus size={14} />
-            Add Task
-          </button>
-        </div>
-
-        {showAddTask ? (
-          <form onSubmit={submitTask} className="brutal-card mb-4 bg-white p-4">
-            <input
-              className="brutal-input mb-2"
-              placeholder="Task title"
-              value={newTask.title}
-              onChange={(event) => setNewTask((state) => ({ ...state, title: event.target.value }))}
-              required
-            />
-            <input
-              className="brutal-input mb-3"
-              placeholder="Task details (optional)"
-              value={newTask.details}
-              onChange={(event) => setNewTask((state) => ({ ...state, details: event.target.value }))}
-            />
+          {isAdmin ? (
             <button
               type="button"
-              className="mb-3 flex h-[28px] w-[28px] items-center justify-center border-2 border-ink"
-              onClick={() => setNewTask((state) => ({ ...state, is_priority: !state.is_priority }))}
+              className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px] text-primary"
+              onClick={() => setShowAddTask(true)}
             >
-              {newTask.is_priority ? '!' : null}
+              <Plus size={14} />
+              Add Task
             </button>
-            <button type="submit" className="brutal-btn w-full bg-primary py-2.5 text-[12px] text-white">
-              Log Task →
-            </button>
-          </form>
-        ) : null}
+          ) : null}
+        </div>
 
         {loading ? (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -257,6 +242,19 @@ export default function AdminTodos() {
                     >
                       <div className="flex items-start gap-2">
                         <div className="flex-1">
+                          {(() => {
+                            const priorityKey =
+                              task.priority || (task.is_priority ? 'high' : 'medium')
+                            const priority =
+                              PRIORITY_STYLES[priorityKey] || PRIORITY_STYLES.medium
+                            return (
+                              <span
+                                className={`mb-1 inline-flex rounded-[2px] px-1.5 py-0.5 text-[9px] font-bold uppercase ${priority.className}`}
+                              >
+                                {priority.label}
+                              </span>
+                            )
+                          })()}
                           <p className={`text-[13px] font-semibold ${task.status === 'complete' ? 'line-through opacity-50' : ''}`}>
                             {task.title}
                           </p>
@@ -265,9 +263,11 @@ export default function AdminTodos() {
                             {task.creator_name || 'Unknown'} · {task.created_at ? format(new Date(task.created_at), 'h:mm a') : '--'}
                           </p>
                         </div>
-                        <button type="button" className="text-[#6B6B6B]" onClick={() => handleDelete(task)}>
-                          <Trash2 size={14} />
-                        </button>
+                        {isAdmin ? (
+                          <button type="button" className="text-[#6B6B6B]" onClick={() => handleDelete(task)}>
+                            <Trash2 size={14} />
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   ))}
@@ -282,7 +282,71 @@ export default function AdminTodos() {
           </div>
         )}
       </main>
-      <BottomNav role="admin" />
+      {showAddTask && isAdmin ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="brutal-card w-full max-w-[640px] bg-white p-5">
+            <div className="mb-3 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Admin</p>
+                <p className="text-[18px] font-extrabold uppercase">Add Task</p>
+              </div>
+              <button
+                type="button"
+                className="brutal-btn bg-white px-3 py-1.5 text-[11px]"
+                onClick={() => setShowAddTask(false)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <form onSubmit={submitTask}>
+              <input
+                className="brutal-input mb-2"
+                placeholder="Task title"
+                value={newTask.title}
+                onChange={(event) => setNewTask((state) => ({ ...state, title: event.target.value }))}
+                required
+              />
+              <input
+                className="brutal-input mb-3"
+                placeholder="Task details (optional)"
+                value={newTask.details}
+                onChange={(event) => setNewTask((state) => ({ ...state, details: event.target.value }))}
+              />
+              <div className="mb-3">
+                <p className="mb-1 text-[10px] font-bold uppercase">Priority</p>
+                <div className="flex gap-2">
+                  {['low', 'medium', 'high'].map((priority) => (
+                    <label
+                      key={priority}
+                      className={`cursor-pointer border-2 px-3 py-2 text-[11px] font-bold uppercase ${
+                        newTask.priority === priority
+                          ? 'border-ink bg-ink text-white'
+                          : 'border-ink bg-white text-ink'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="priority"
+                        value={priority}
+                        checked={newTask.priority === priority}
+                        onChange={(event) =>
+                          setNewTask((state) => ({ ...state, priority: event.target.value }))
+                        }
+                        className="sr-only"
+                      />
+                      {priority}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button type="submit" className="brutal-btn w-full bg-primary py-2.5 text-[12px] text-white">
+                Log Task →
+              </button>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      <BottomNav role={isAdmin ? 'admin' : 'staff'} />
     </div>
   )
 }

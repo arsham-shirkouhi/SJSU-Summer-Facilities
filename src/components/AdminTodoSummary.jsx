@@ -39,18 +39,18 @@ export default function AdminTodoSummary({ onOpenDetail }) {
 
   const cards = [
     {
-      key: 'ongoing',
-      label: 'ONGOING',
-      value: counts.ongoing,
-      valueColor: 'text-amber',
-      accentBorder: 'border-l-amber',
-    },
-    {
       key: 'notStarted',
       label: 'NOT STARTED',
       value: counts.notStarted,
       valueColor: 'text-danger',
       accentBorder: 'border-l-danger',
+    },
+    {
+      key: 'ongoing',
+      label: 'ONGOING',
+      value: counts.ongoing,
+      valueColor: 'text-amber',
+      accentBorder: 'border-l-amber',
     },
     {
       key: 'complete',

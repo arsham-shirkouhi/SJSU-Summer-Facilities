@@ -1,13 +1,11 @@
 import { useAuth } from '../context/AuthContext'
+import { UserCircle2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 export default function TopBar() {
-  const { user, profile, signOut, signingOut } = useAuth()
+  const { user, profile } = useAuth()
   const normalizedRole = String(profile?.role || '').trim().toLowerCase()
   const roleLabel = normalizedRole ? normalizedRole.toUpperCase() : 'NONE'
-
-  const handleSignOut = async () => {
-    await signOut()
-  }
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 h-14 border-b-[2.5px] border-ink bg-ink px-5">
@@ -29,14 +27,13 @@ export default function TopBar() {
             </span>
           ) : null}
           <div className="h-4 w-px bg-white/40" />
-          <button
-            type="button"
-            className="border-[1.5px] border-white/60 px-2.5 py-1 text-[11px] font-bold uppercase tracking-[0.07em] text-white"
-            onClick={handleSignOut}
-            disabled={signingOut}
+          <Link
+            to="/profile"
+            className="inline-flex h-9 w-9 items-center justify-center border-[1.5px] border-white/60 text-white transition-colors hover:bg-white/10"
+            aria-label="Open profile"
           >
-            {signingOut ? 'OUT...' : 'OUT →'}
-          </button>
+            <UserCircle2 size={19} />
+          </Link>
         </div>
       </div>
     </header>

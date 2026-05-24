@@ -19,7 +19,6 @@ import BottomNav from '../components/BottomNav'
 import LaundryLoadCard from '../components/LaundryLoadCard'
 import NewLoadModal from '../components/NewLoadModal'
 import AdminTodoSummary from '../components/AdminTodoSummary'
-import AdminPickupCalendar from '../components/AdminPickupCalendar'
 import AdminLinenCount from '../components/AdminLinenCount'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../supabase'
@@ -376,34 +375,24 @@ function StaffDashboard({ user, profile }) {
 
 function AdminDashboard({ user, profile }) {
   const navigate = useNavigate()
-  const [loading, setLoading] = useState(true)
   const [shiftNote, setShiftNote] = useState(null)
   const [pickup, setPickup] = useState(null)
   const [pickupError, setPickupError] = useState('')
-  const [staffActivity, setStaffActivity] = useState([])
-  const [uncounted, setUncounted] = useState([])
   const [error, setError] = useState('')
 
   const loadAdminPanels = async () => {
     try {
-      setLoading(true)
       setError('')
       setPickupError('')
-      const [shiftData, pickupData, staffData, shelvesData] = await Promise.all([
+      const [shiftData, pickupData] = await Promise.all([
         getActiveShiftNote(),
         getNextPickupDate(),
-        getStaffActivityToday(),
-        getUncountedShelves(),
       ])
       setShiftNote(shiftData)
       setPickup(pickupData)
-      setStaffActivity(staffData)
-      setUncounted(shelvesData)
     } catch (loadError) {
       setError(loadError.message)
       setPickupError(loadError.message)
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -416,7 +405,6 @@ function AdminDashboard({ user, profile }) {
       .channel('admin-dashboard-panels')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'shift_notes' }, loadAdminPanels)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_schedule' }, loadAdminPanels)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'log_entries' }, loadAdminPanels)
       .subscribe()
 
     return () => supabase.removeChannel(channel)
@@ -446,70 +434,8 @@ function AdminDashboard({ user, profile }) {
 
       <AdminTodoSummary onOpenDetail={() => navigate('/admin-todos')} />
       <AdminLinenCount />
-      <AdminPickupCalendar />
 
       {error ? <ErrorBlock message={error} onRetry={loadAdminPanels} /> : null}
-
-      <LabeledSection label="Staff Activity Strip">
-        <div className="flex flex-wrap gap-2.5">
-          {loading ? (
-            <div className="skeleton h-20 w-full" />
-          ) : null}
-          {staffActivity.map((staff) => {
-            const initials = (staff.full_name || 'S')
-              .split(' ')
-              .slice(0, 2)
-              .map((part) => part[0])
-              .join('')
-            return (
-              <div
-                key={staff.id}
-                className={`border-2 border-ink bg-white px-3.5 py-3 shadow-brutal-sm ${staff.entry_count ? '' : 'opacity-50'
-                  } min-w-40`}
-              >
-                <div className="mb-2 flex items-center gap-2">
-                  <div className="mono flex h-[30px] w-[30px] items-center justify-center bg-ink text-[13px] font-bold text-white">
-                    {initials}
-                  </div>
-                  <p className="text-[13px] font-semibold">{staff.full_name}</p>
-                </div>
-                {staff.entry_count ? (
-                  <>
-                    <p className="mono text-[12px] font-bold text-primary">{staff.entry_count} ENTRIES</p>
-                    <p className="mono text-[10px] text-[#6B6B6B]">
-                      Last: {staff.last_active ? formatDistanceToNowStrict(parseISO(staff.last_active), { addSuffix: true }) : 'N/A'}
-                    </p>
-                  </>
-                ) : (
-                  <span className="stamp stamp-gray">Inactive</span>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </LabeledSection>
-
-      <LabeledSection label="Uncounted Shelves">
-        {uncounted.length ? (
-          uncounted.map((shelf) => (
-            <div key={shelf.id} className="flex items-center border-b-[1.5px] border-stone py-2.5">
-              <div>
-                <p className="text-[13px] font-bold">{shelf.locations?.name}</p>
-                <p className="text-[12px] text-[#6B6B6B]">{shelf.name}</p>
-              </div>
-              <p className="mono ml-3 text-[11px] text-[#6B6B6B]">
-                {shelf.last_count_time
-                  ? formatDistanceToNowStrict(parseISO(shelf.last_count_time), { addSuffix: true })
-                  : 'Never counted'}
-              </p>
-            </div>
-          ))
-        ) : (
-          <div className="border-[2.5px] border-ink bg-primary-light p-3.5 text-center text-[16px] font-extrabold shadow-brutal">
-            ALL CLEAR ✓
-          </div>
-        )}
-      </LabeledSection>
     </section>
   )
 }
@@ -556,9 +482,9 @@ function PickupBanner({ pickup, pickupError, onRetry }) {
   return (
     <div className={`mb-5 flex items-center gap-3 border-[2.5px] border-ink px-4 py-3 shadow-brutal ${bg}`}>
       <CalendarDays size={20} />
-      <p className="text-[11px] font-extrabold uppercase">Next Pickup:</p>
+      <p className="text-[11px] font-extrabold uppercase">Next Event:</p>
       <p className="mono text-[15px] font-bold">
-        {nextDate ? format(nextDate, 'EEEE, MMMM d').toUpperCase() : 'NO PICKUP SCHEDULED'}
+        {nextDate ? format(nextDate, 'EEEE, MMMM d').toUpperCase() : 'NO EVENT SCHEDULED'}
       </p>
       <span className={`stamp ml-auto ${stampClass}`}>{stampText}</span>
     </div>

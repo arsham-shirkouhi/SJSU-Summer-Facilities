@@ -5,8 +5,19 @@ import { getProfile } from '../lib/queries'
 
 const AuthContext = createContext(null)
 const normalizeRole = (role) => String(role || '').trim().toLowerCase()
+const LOCAL_ADMIN_EMAILS = new Set(
+  String(import.meta.env.VITE_LOCAL_ADMIN_EMAILS || '')
+    .split(',')
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
+)
+const isLocalAdminEmail = (email) => LOCAL_ADMIN_EMAILS.has(String(email || '').trim().toLowerCase())
+const resolveRole = (baseRole, sessionUser) =>
+  isLocalAdminEmail(sessionUser?.email) ? 'admin' : normalizeRole(baseRole) || 'staff'
+
 const buildFallbackProfile = (sessionUser) => {
   const metadata = sessionUser?.user_metadata || {}
+  const appMetadata = sessionUser?.app_metadata || {}
   const emailPrefix = String(sessionUser?.email || '')
     .split('@')[0]
     .replace(/[._-]+/g, ' ')
@@ -15,7 +26,7 @@ const buildFallbackProfile = (sessionUser) => {
   return {
     id: sessionUser?.id,
     full_name: metadata.full_name || emailPrefix || 'Staff User',
-    role: normalizeRole(metadata.role) || 'staff',
+    role: resolveRole(metadata.role || appMetadata.role, sessionUser),
     location_access: null,
     is_active: true,
     created_at: null,
@@ -53,22 +64,21 @@ export function AuthProvider({ children }) {
 
         setUser(sessionUser)
         if (sessionUser) {
-          getProfile(sessionUser.id)
-            .then((profileData) => {
-              if (mounted) {
-                if (profileData) {
-                  setProfile({
-                    ...profileData,
-                    role: normalizeRole(profileData?.role),
-                  })
-                } else {
-                  setProfile(buildFallbackProfile(sessionUser))
-                }
+          try {
+            const profileData = await getProfile(sessionUser.id)
+            if (mounted) {
+              if (profileData) {
+                setProfile({
+                  ...profileData,
+                  role: resolveRole(profileData?.role, sessionUser),
+                })
+              } else {
+                setProfile(buildFallbackProfile(sessionUser))
               }
-            })
-            .catch(() => {
-              if (mounted) setProfile(buildFallbackProfile(sessionUser))
-            })
+            }
+          } catch (_error) {
+            if (mounted) setProfile(buildFallbackProfile(sessionUser))
+          }
         } else {
           setProfile(null)
         }
@@ -97,14 +107,19 @@ export function AuthProvider({ children }) {
             if (profileData) {
               setProfile({
                 ...profileData,
-                role: normalizeRole(profileData?.role),
+                role: resolveRole(profileData?.role, sessionUser),
               })
             } else {
               setProfile(buildFallbackProfile(sessionUser))
             }
           }
         } catch (_error) {
-          if (mounted) setProfile(buildFallbackProfile(sessionUser))
+          if (mounted) {
+            setProfile((current) => {
+              if (current?.id === sessionUser.id && normalizeRole(current?.role)) return current
+              return buildFallbackProfile(sessionUser)
+            })
+          }
         }
       } else if (mounted) {
         setProfile(null)

@@ -1,7 +1,6 @@
 import {
-  BarChart2,
+  CalendarDays,
   CheckSquare,
-  Clock,
   LayoutDashboard,
   Package,
   Users,
@@ -13,16 +12,16 @@ const staffTabs = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
   { label: 'Inventory', icon: Package, to: '/inventory' },
   { label: 'Laundry', icon: Waves, to: '/dashboard#laundry' },
-  { label: 'Tasks', icon: CheckSquare, to: '/dashboard#tasks' },
-  { label: 'History', icon: Clock, to: '/dashboard#history' },
+  { label: 'Tasks', icon: CheckSquare, to: '/staff-todos' },
+  { label: 'Events', icon: CalendarDays, to: '/events' },
 ]
 
 const adminTabs = [
   { label: 'Overview', icon: LayoutDashboard, to: '/dashboard' },
   { label: 'Todos', icon: CheckSquare, to: '/admin-todos' },
-  { label: 'Staff', icon: Users, to: '/dashboard#staff' },
+  { label: 'Schedule', icon: CalendarDays, to: '/admin-schedule' },
+  { label: 'Staff', icon: Users, to: '/admin-staff' },
   { label: 'Inventory', icon: Package, to: '/inventory' },
-  { label: 'Reports', icon: BarChart2, to: '/dashboard#reports' },
 ]
 
 export default function BottomNav({ role = 'staff' }) {

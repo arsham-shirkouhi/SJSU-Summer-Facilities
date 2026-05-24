@@ -6,6 +6,10 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Inventory from './pages/Inventory'
 import AdminTodos from './pages/AdminTodos'
+import AdminSchedule from './pages/AdminSchedule'
+import AdminStaff from './pages/AdminStaff'
+import Profile from './pages/Profile'
+import StaffEvents from './pages/StaffEvents'
 
 function AppRoutes() {
   return (
@@ -33,6 +37,46 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <AdminTodos />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/staff-todos"
+        element={
+          <ProtectedRoute>
+            <AdminTodos />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin-schedule"
+        element={
+          <ProtectedRoute>
+            <AdminSchedule />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin-staff"
+        element={
+          <ProtectedRoute>
+            <AdminStaff />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <Profile />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/events"
+        element={
+          <ProtectedRoute>
+            <StaffEvents />
           </ProtectedRoute>
         }
       />

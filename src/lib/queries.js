@@ -17,6 +17,22 @@ export async function withTimeout(promise, ms = 8000) {
 }
 
 export async function getProfile(userId) {
+  let roleData = null
+  let profileData = null
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('user_access_roles')
+        .select('role')
+        .eq('user_id', userId)
+        .maybeSingle(),
+    )
+    if (!error) roleData = data
+  } catch (_error) {
+    // Ignore role-table fetch errors; profile table may still resolve.
+  }
+
   try {
     const { data, error } = await withTimeout(
       supabase
@@ -25,8 +41,47 @@ export async function getProfile(userId) {
         .eq('id', userId)
         .maybeSingle(),
     )
+    if (!error) profileData = data
+  } catch (_error) {
+    // Ignore profile fetch errors; role-table can still drive admin/staff view.
+  }
+
+  const effectiveRole = roleData?.role || profileData?.role || 'staff'
+  if (profileData) return { ...profileData, role: effectiveRole }
+
+  return {
+    id: userId,
+    full_name: 'Staff User',
+    role: effectiveRole,
+    location_access: null,
+    is_active: true,
+    created_at: null,
+  }
+}
+
+export async function getAdminMembers() {
+  try {
+    const { data, error } = await withTimeout(supabase.rpc('admin_list_members'))
     if (error) throw error
-    return data
+    return data || []
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function adminCreateUserAccount({ email, fullName, temporaryPassword, role }) {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('admin_create_user_account', {
+        p_email: email,
+        p_full_name: fullName,
+        p_temporary_password: temporaryPassword,
+        p_role: role,
+      }),
+      12000,
+    )
+    if (error) throw error
+    return Array.isArray(data) ? data[0] : data
   } catch (error) {
     throw error
   }
@@ -138,7 +193,7 @@ export async function getTasksForToday() {
     const { data, error } = await withTimeout(
       supabase
         .from('tasks')
-        .select('id,title,details,assigned_date,status,is_priority,created_by,creator_name,created_at')
+        .select('id,title,details,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
         .eq('assigned_date', todayIso())
         .order('is_priority', { ascending: false })
         .order('created_at', { ascending: true })
@@ -157,7 +212,7 @@ export async function getAllTasksForToday() {
     const { data, error } = await withTimeout(
       supabase
         .from('tasks')
-        .select('id,title,details,status,is_priority,creator_name,created_at')
+        .select('id,title,details,status,priority,is_priority,creator_name,created_at')
         .eq('assigned_date', today)
         .order('is_priority', { ascending: false })
         .order('created_at', { ascending: true }),
@@ -175,7 +230,7 @@ export async function insertTask(task) {
       supabase
         .from('tasks')
         .insert(task)
-        .select('id,title,details,assigned_date,status,is_priority,created_by,creator_name,created_at')
+        .select('id,title,details,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
         .single(),
     )
     if (error) throw error
@@ -213,7 +268,7 @@ export async function updateTask(id, updates) {
         .from('tasks')
         .update(updates)
         .eq('id', id)
-        .select('id,title,details,assigned_date,status,is_priority,created_by,creator_name,created_at')
+        .select('id,title,details,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
         .single(),
     )
     if (error) throw error
@@ -390,12 +445,12 @@ export async function getPickupDates() {
   }
 }
 
-export async function addPickupDate(pickupDate, userId) {
+export async function addPickupDate(pickupDate, userId, notes = null) {
   try {
     const { data, error } = await withTimeout(
       supabase
         .from('pickup_schedule')
-        .insert({ pickup_date: pickupDate, created_by: userId || null })
+        .insert({ pickup_date: pickupDate, created_by: userId || null, notes: notes || null })
         .select()
         .single(),
     )

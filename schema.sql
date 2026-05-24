@@ -4,6 +4,8 @@ create extension if not exists pgcrypto;
 
 drop trigger if exists on_auth_user_created on auth.users;
 drop function if exists public.handle_new_user();
+drop function if exists public.admin_list_members();
+drop function if exists public.admin_create_user_account(text, text, text, text);
 
 drop table if exists laundry_batch_items cascade;
 drop table if exists laundry_batches cascade;
@@ -19,6 +21,7 @@ drop table if exists pickup_schedule cascade;
 drop table if exists announcements cascade;
 drop table if exists items cascade;
 drop table if exists locations cascade;
+drop table if exists user_access_roles cascade;
 drop table if exists profiles cascade;
 
 -- profiles
@@ -28,6 +31,13 @@ create table profiles (
   role text not null default 'staff',
   location_access uuid[],
   is_active boolean default true,
+  created_at timestamptz default now()
+);
+
+-- source-of-truth roles by auth user id
+create table user_access_roles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  role text not null check (role in ('admin', 'staff')),
   created_at timestamptz default now()
 );
 
@@ -153,6 +163,7 @@ create table tasks (
   details text,
   assigned_date date not null default current_date,
   status text default 'pending',
+  priority text not null default 'medium' check (priority in ('low', 'medium', 'high')),
   is_priority boolean default false,
   created_by uuid references profiles,
   creator_name text,
@@ -221,6 +232,7 @@ alter table shift_notes enable row level security;
 alter table pickup_schedule enable row level security;
 alter table announcements enable row level security;
 alter table location_linen_totals enable row level security;
+alter table user_access_roles enable row level security;
 
 -- clean existing policies so this script is rerunnable
 drop policy if exists "Users can read own profile" on profiles;
@@ -256,6 +268,178 @@ drop policy if exists "Admins can delete pickup schedule" on pickup_schedule;
 drop policy if exists "Authenticated users can read announcements" on announcements;
 drop policy if exists "Authenticated users can read location linen totals" on location_linen_totals;
 drop policy if exists "Authenticated users can update location linen totals" on location_linen_totals;
+drop policy if exists "Users can read own access role" on user_access_roles;
+drop policy if exists "Admins can read all access roles" on user_access_roles;
+
+-- helper to avoid recursive RLS checks when evaluating admin status
+create or replace function public.is_admin(_uid uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.user_access_roles
+    where public.user_access_roles.user_id = _uid and public.user_access_roles.role = 'admin'
+  );
+$$;
+
+revoke all on function public.is_admin(uuid) from public;
+grant execute on function public.is_admin(uuid) to authenticated;
+
+create or replace function public.admin_list_members()
+returns table (
+  user_id uuid,
+  email text,
+  full_name text,
+  role text,
+  is_active boolean,
+  created_at timestamptz
+)
+language sql
+security definer
+set search_path = public, auth
+as $$
+  select
+    u.id as user_id,
+    u.email::text as email,
+    p.full_name,
+    coalesce(uar.role, p.role, 'staff') as role,
+    coalesce(p.is_active, true) as is_active,
+    coalesce(p.created_at, u.created_at) as created_at
+  from auth.users u
+  left join public.profiles p on p.id = u.id
+  left join public.user_access_roles uar on uar.user_id = u.id
+  where public.is_admin(auth.uid())
+  order by coalesce(p.created_at, u.created_at) desc;
+$$;
+
+revoke all on function public.admin_list_members() from public;
+grant execute on function public.admin_list_members() to authenticated;
+
+create or replace function public.admin_create_user_account(
+  p_email text,
+  p_full_name text,
+  p_temporary_password text,
+  p_role text default 'staff'
+)
+returns table (
+  user_id uuid,
+  email text,
+  full_name text,
+  role text,
+  is_active boolean,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  v_user_id uuid := gen_random_uuid();
+  v_email text := lower(trim(p_email));
+  v_role text := lower(trim(coalesce(p_role, 'staff')));
+  v_name text := coalesce(nullif(trim(p_full_name), ''), 'Staff User');
+begin
+  if not public.is_admin(auth.uid()) then
+    raise exception 'Only admins can create users';
+  end if;
+
+  if v_email is null or v_email = '' then
+    raise exception 'Email is required';
+  end if;
+
+  if p_temporary_password is null or length(p_temporary_password) < 8 then
+    raise exception 'Temporary password must be at least 8 characters';
+  end if;
+
+  if v_role not in ('admin', 'staff') then
+    raise exception 'Role must be admin or staff';
+  end if;
+
+  if exists (select 1 from auth.users u where lower(u.email) = v_email) then
+    raise exception 'A user with this email already exists';
+  end if;
+
+  insert into auth.users (
+    instance_id,
+    id,
+    aud,
+    role,
+    email,
+    encrypted_password,
+    email_confirmed_at,
+    raw_app_meta_data,
+    raw_user_meta_data,
+    created_at,
+    updated_at,
+    confirmation_token,
+    email_change,
+    email_change_token_new,
+    recovery_token
+  )
+  values (
+    '00000000-0000-0000-0000-000000000000',
+    v_user_id,
+    'authenticated',
+    'authenticated',
+    v_email,
+    extensions.crypt(p_temporary_password, extensions.gen_salt('bf')),
+    now(),
+    jsonb_build_object('provider', 'email', 'providers', array['email']),
+    jsonb_build_object('full_name', v_name, 'role', v_role),
+    now(),
+    now(),
+    '',
+    '',
+    '',
+    ''
+  );
+
+  insert into auth.identities (
+    id,
+    user_id,
+    provider_id,
+    identity_data,
+    provider,
+    last_sign_in_at,
+    created_at,
+    updated_at
+  )
+  values (
+    gen_random_uuid(),
+    v_user_id,
+    v_email,
+    jsonb_build_object('sub', v_user_id::text, 'email', v_email),
+    'email',
+    now(),
+    now(),
+    now()
+  );
+
+  insert into public.user_access_roles (user_id, role)
+  values (v_user_id, v_role)
+  on conflict on constraint user_access_roles_pkey do update set role = excluded.role;
+
+  insert into public.profiles (id, full_name, role)
+  values (v_user_id, v_name, v_role)
+  on conflict (id) do update
+  set full_name = excluded.full_name, role = excluded.role;
+
+  return query
+  select
+    v_user_id as user_id,
+    v_email as email,
+    v_name as full_name,
+    v_role as role,
+    true as is_active,
+    now() as created_at;
+end;
+$$;
+
+revoke all on function public.admin_create_user_account(text, text, text, text) from public;
+grant execute on function public.admin_create_user_account(text, text, text, text) to authenticated;
 
 -- profiles: users can read their own, admins can read all
 create policy "Users can read own profile"
@@ -264,16 +448,19 @@ create policy "Users can read own profile"
 
 create policy "Admins can read all profiles"
   on profiles for select
-  using (
-    exists (
-      select 1 from profiles
-      where id = auth.uid() and role = 'admin'
-    )
-  );
+  using (public.is_admin(auth.uid()));
 
 create policy "Users can update own profile"
   on profiles for update
   using (auth.uid() = id);
+
+create policy "Users can read own access role"
+  on user_access_roles for select
+  using (auth.uid() = user_access_roles.user_id);
+
+create policy "Admins can read all access roles"
+  on user_access_roles for select
+  using (public.is_admin(auth.uid()));
 
 -- locations: all authenticated users can read
 create policy "Authenticated users can read locations"
@@ -387,11 +574,11 @@ create policy "Authenticated users can read pickup schedule"
 
 create policy "Admins can insert pickup schedule"
   on pickup_schedule for insert
-  with check (auth.role() = 'authenticated');
+  with check (public.is_admin(auth.uid()));
 
 create policy "Admins can delete pickup schedule"
   on pickup_schedule for delete
-  using (auth.role() = 'authenticated');
+  using (public.is_admin(auth.uid()));
 
 -- announcements: all authenticated users can read active ones
 create policy "Authenticated users can read announcements"
@@ -410,7 +597,14 @@ create policy "Authenticated users can update location linen totals"
 -- auto create profile on signup trigger
 create or replace function public.handle_new_user()
 returns trigger as $$
+declare
+  resolved_role text;
 begin
+  select role
+  into resolved_role
+  from public.user_access_roles
+  where public.user_access_roles.user_id = new.id;
+
   insert into public.profiles (id, full_name, role)
   values (
     new.id,
@@ -419,11 +613,7 @@ begin
       nullif(initcap(replace(split_part(new.email, '@', 1), '.', ' ')), ''),
       'Staff User'
     ),
-    case
-      when coalesce(new.raw_user_meta_data->>'role', 'staff') in ('admin', 'staff')
-        then coalesce(new.raw_user_meta_data->>'role', 'staff')
-      else 'staff'
-    end
+    coalesce(resolved_role, 'staff')
   );
   return new;
 end;
@@ -486,3 +676,29 @@ insert into items (name, label) values
 ('bath_towels', 'Bath Towels'),
 ('hand_towels', 'Hand Towels'),
 ('blankets', 'Blankets');
+
+-- seed fixed access roles by UID (source of truth for admin/staff app view)
+insert into user_access_roles (user_id, role) values
+('268bf8c6-e2b6-4184-9dca-49453f315e26', 'admin'),
+('8fbcb454-1ff9-4fc1-a757-b08742a329ff', 'staff')
+on conflict on constraint user_access_roles_pkey do update set role = excluded.role;
+
+-- backfill profiles for existing auth users and sync role from access-role table
+insert into public.profiles (id, full_name, role)
+select
+  u.id,
+  coalesce(
+    nullif(trim(u.raw_user_meta_data->>'full_name'), ''),
+    nullif(initcap(replace(split_part(u.email, '@', 1), '.', ' ')), ''),
+    'Staff User'
+  ),
+  coalesce(uar.role, 'staff')
+from auth.users u
+left join public.profiles p on p.id = u.id
+left join public.user_access_roles uar on uar.user_id = u.id
+where p.id is null;
+
+update public.profiles p
+set role = uar.role
+from public.user_access_roles uar
+where p.id = uar.user_id;
