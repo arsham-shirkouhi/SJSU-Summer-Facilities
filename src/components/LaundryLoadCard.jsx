@@ -133,7 +133,7 @@ export default function LaundryLoadCard({ load, onComplete, showCompleteAction =
           </div>
           <div style={{ marginTop: '4px' }}>
             <span
-              className={`stamp ${isComplete ? 'stamp-green' : 'stamp-amber'}`}
+              className={`stamp ${isComplete ? 'stamp-blue' : 'stamp-amber'}`}
             >
               {statusLabel}
             </span>
@@ -154,7 +154,7 @@ export default function LaundryLoadCard({ load, onComplete, showCompleteAction =
             flex: showCompleteAction ? 1 : 'unset',
             width: showCompleteAction ? 'auto' : '100%',
             height: actionControlHeight,
-            border: '2.5px solid #0A0A0A',
+            border: '2.5px solid #001A57',
             background: '#F5F0E8',
             position: 'relative',
             overflow: 'hidden',
@@ -164,7 +164,7 @@ export default function LaundryLoadCard({ load, onComplete, showCompleteAction =
             style={{
               width: `${progressPercent}%`,
               height: '100%',
-              backgroundColor: isComplete ? '#1D9E75' : '#F5A623',
+              backgroundColor: isComplete ? '#0038A7' : '#FAB81B',
               transition: 'width 1s linear, background-color 0.5s ease',
             }}
           />
@@ -179,7 +179,7 @@ export default function LaundryLoadCard({ load, onComplete, showCompleteAction =
               fontFamily: 'JetBrains Mono',
               fontSize: '10px',
               fontWeight: 700,
-              color: '#0A0A0A',
+              color: '#001A57',
             }}
           >
             {isComplete ? 'Done' : formatTimeRemaining(remainingMs, isOverdue, load.estimated_finish_at)}

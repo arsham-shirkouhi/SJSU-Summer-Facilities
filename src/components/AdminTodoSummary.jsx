@@ -71,7 +71,7 @@ export default function AdminTodoSummary({ onOpenDetail }) {
           <button
             key={card.key}
             type="button"
-            className={`group brutal-card border-l-4 bg-white px-4 py-3 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_5px_0_#0A0A0A] active:translate-y-0.5 active:shadow-[2px_2px_0_#0A0A0A] ${card.accentBorder}`}
+            className={`group brutal-card border-l-4 bg-white px-4 py-3 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_5px_0_#001A57] active:translate-y-0.5 active:shadow-[2px_2px_0_#001A57] ${card.accentBorder}`}
             onClick={onOpenDetail}
           >
             <div className="mb-1 flex items-start justify-between gap-2">

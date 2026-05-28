@@ -188,12 +188,141 @@ export async function getShelvesByRoom(locationId) {
   }
 }
 
+const resolveLocationTotalColumn = (itemName, itemLabel) => {
+  const value = `${itemName || ''} ${itemLabel || ''}`.toLowerCase()
+  if (value.includes('pillow')) return 'pillow_case'
+  if (value.includes('hand') || value.includes('face')) return 'face_hand_towel'
+  if (value.includes('body') || value.includes('bath')) return 'body_towel'
+  if (value.includes('sheet') || value.includes('linen')) return 'linen'
+  return null
+}
+
+export async function adjustShelfItemCount({
+  shelfId,
+  locationId,
+  itemId,
+  delta,
+  staffId,
+  staffName,
+  itemName,
+  itemLabel,
+}) {
+  try {
+    const change = Number(delta || 0)
+    if (!change) return { current_balance: null, applied_delta: 0 }
+
+    const { data: currentBalanceRow, error: balanceFetchError } = await withTimeout(
+      supabase
+        .from('balances')
+        .select('id,current_balance')
+        .eq('shelf_id', shelfId)
+        .eq('item_id', itemId)
+        .maybeSingle(),
+    )
+    if (balanceFetchError) throw balanceFetchError
+
+    const currentBalance = Number(currentBalanceRow?.current_balance || 0)
+    const nextBalance = Math.max(0, currentBalance + change)
+    const appliedDelta = nextBalance - currentBalance
+
+    if (appliedDelta === 0) {
+      return { current_balance: currentBalance, applied_delta: 0 }
+    }
+
+    let updatedBalanceRow = null
+    if (currentBalanceRow?.id) {
+      const { data, error } = await withTimeout(
+        supabase
+          .from('balances')
+          .update({
+            current_balance: nextBalance,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', currentBalanceRow.id)
+          .select('id,current_balance')
+          .single(),
+      )
+      if (error) throw error
+      updatedBalanceRow = data
+    } else {
+      const { data, error } = await withTimeout(
+        supabase
+          .from('balances')
+          .insert({
+            shelf_id: shelfId,
+            location_id: locationId,
+            item_id: itemId,
+            current_balance: nextBalance,
+          })
+          .select('id,current_balance')
+          .single(),
+      )
+      if (error) throw error
+      updatedBalanceRow = data
+    }
+
+    const actionType = appliedDelta > 0 ? 'restock' : 'pull'
+    await withTimeout(
+      supabase.from('log_entries').insert({
+        location_id: locationId,
+        shelf_id: shelfId,
+        item_id: itemId,
+        action_type: actionType,
+        quantity: Math.abs(appliedDelta),
+        staff_id: staffId || null,
+        staff_name: staffName || null,
+        notes: 'rack_count_adjustment',
+      }),
+    )
+
+    const totalColumn = resolveLocationTotalColumn(itemName, itemLabel)
+    if (totalColumn && locationId) {
+      const { data: totalRow, error: totalsFetchError } = await withTimeout(
+        supabase
+          .from('location_linen_totals')
+          .select('id,linen,face_hand_towel,body_towel,pillow_case')
+          .eq('location_id', locationId)
+          .maybeSingle(),
+      )
+      if (totalsFetchError) throw totalsFetchError
+
+      if (totalRow?.id) {
+        const updatedTotal = Math.max(0, Number(totalRow[totalColumn] || 0) + appliedDelta)
+        const { error: totalsUpdateError } = await withTimeout(
+          supabase
+            .from('location_linen_totals')
+            .update({ [totalColumn]: updatedTotal, updated_at: new Date().toISOString() })
+            .eq('id', totalRow.id),
+        )
+        if (totalsUpdateError) throw totalsUpdateError
+      } else {
+        const baseTotals = {
+          location_id: locationId,
+          linen: 0,
+          face_hand_towel: 0,
+          body_towel: 0,
+          pillow_case: 0,
+        }
+        baseTotals[totalColumn] = Math.max(0, appliedDelta)
+        const { error: totalsInsertError } = await withTimeout(
+          supabase.from('location_linen_totals').insert(baseTotals),
+        )
+        if (totalsInsertError) throw totalsInsertError
+      }
+    }
+
+    return { current_balance: Number(updatedBalanceRow?.current_balance || nextBalance), applied_delta: appliedDelta }
+  } catch (error) {
+    throw error
+  }
+}
+
 export async function getTasksForToday() {
   try {
     const { data, error } = await withTimeout(
       supabase
         .from('tasks')
-        .select('id,title,details,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
+        .select('id,title,details,subtasks,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
         .eq('assigned_date', todayIso())
         .order('is_priority', { ascending: false })
         .order('created_at', { ascending: true })
@@ -212,7 +341,7 @@ export async function getAllTasksForToday() {
     const { data, error } = await withTimeout(
       supabase
         .from('tasks')
-        .select('id,title,details,status,priority,is_priority,creator_name,created_at')
+        .select('id,title,details,subtasks,status,priority,is_priority,creator_name,created_at')
         .eq('assigned_date', today)
         .order('is_priority', { ascending: false })
         .order('created_at', { ascending: true }),
@@ -230,7 +359,7 @@ export async function insertTask(task) {
       supabase
         .from('tasks')
         .insert(task)
-        .select('id,title,details,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
+        .select('id,title,details,subtasks,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
         .single(),
     )
     if (error) throw error
@@ -268,7 +397,7 @@ export async function updateTask(id, updates) {
         .from('tasks')
         .update(updates)
         .eq('id', id)
-        .select('id,title,details,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
+        .select('id,title,details,subtasks,assigned_date,status,priority,is_priority,created_by,creator_name,created_at')
         .single(),
     )
     if (error) throw error

@@ -255,8 +255,8 @@ function StaffDashboard({ user, profile }) {
     <section className="mx-auto w-full max-w-[720px] px-4 py-5 sm:px-6 md:px-8">
       <GreetingHeader
         profile={profile}
-        onOpenTasks={() => setShowTasksDrawer(true)}
-        activeTaskCount={inProgressTasks.length}
+        onOpenTasks={() => navigate('/staff-todos')}
+        totalTaskCount={sortedTasks.length}
         doneTaskCount={completeTasks.length}
       />
 
@@ -331,10 +331,10 @@ function StaffDashboard({ user, profile }) {
               </span>
               <span
                 className={`stamp ${entry.action_type?.includes('restock')
-                    ? 'stamp-green'
+                    ? 'stamp-blue'
                     : entry.action_type?.includes('pull')
                       ? 'stamp-amber'
-                      : 'stamp-black'
+                      : 'stamp-ink'
                   }`}
               >
                 {entry.action_type || 'audit'}
@@ -440,8 +440,7 @@ function AdminDashboard({ user, profile }) {
   )
 }
 
-function GreetingHeader({ profile, onOpenTasks, activeTaskCount, doneTaskCount }) {
-  const now = new Date()
+function GreetingHeader({ profile, onOpenTasks, totalTaskCount, doneTaskCount }) {
   return (
     <div className="mb-6 border-b-[3px] border-ink pb-4 sm:flex sm:items-end sm:justify-between">
       <div>
@@ -449,21 +448,17 @@ function GreetingHeader({ profile, onOpenTasks, activeTaskCount, doneTaskCount }
         <h2 className="text-[28px] font-extrabold">{profile?.full_name || 'Staff'}</h2>
       </div>
       <div className="mt-2 text-left sm:mt-0 sm:text-right">
-        <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">{format(now, 'EEEE')}</p>
-        <div className="mt-1 flex items-center gap-2 sm:justify-end">
-          <p className="mono text-[16px] font-bold">{format(now, 'dd MMM yyyy').toUpperCase()}</p>
-          <button
-            type="button"
-            onClick={onOpenTasks}
-            className="brutal-btn flex items-center gap-1.5 bg-white px-2.5 py-1 text-[10px] font-extrabold text-primary"
-          >
-            <ClipboardList size={13} />
-            Today&apos;s Tasks
-            <span className="mono rounded-sm bg-primary px-1.5 py-0.5 text-[9px] text-white">
-              {activeTaskCount}/{doneTaskCount}
-            </span>
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onOpenTasks}
+          className="brutal-btn flex items-center gap-1.5 bg-white px-2.5 py-1 text-[10px] font-extrabold text-primary sm:ml-auto"
+        >
+          <ClipboardList size={13} />
+          Today&apos;s Tasks
+          <span className="mono rounded-sm bg-primary px-1.5 py-0.5 text-[9px] text-white">
+            {doneTaskCount}/{totalTaskCount}
+          </span>
+        </button>
       </div>
     </div>
   )
@@ -472,11 +467,12 @@ function GreetingHeader({ profile, onOpenTasks, activeTaskCount, doneTaskCount }
 function PickupBanner({ pickup, pickupError, onRetry }) {
   if (pickupError) return <ErrorBlock message={pickupError} onRetry={onRetry} />
   const nextDate = pickup?.pickup_date ? parseISO(pickup.pickup_date) : null
+  const eventTitle = parseEventTitle(pickup?.notes)
   const daysDiff = nextDate ? Math.round((nextDate - new Date()) / (1000 * 60 * 60 * 24)) : null
   const isUrgent = daysDiff !== null && daysDiff <= 2
   const todayPickup = nextDate && isToday(nextDate)
   const bg = todayPickup ? 'bg-primary-light' : isUrgent ? 'bg-amber-light' : 'bg-white'
-  const stampClass = todayPickup ? 'stamp-green' : isUrgent ? 'stamp-amber' : 'stamp-gray'
+  const stampClass = todayPickup ? 'stamp-blue' : isUrgent ? 'stamp-amber' : 'stamp-gray'
   const stampText = todayPickup ? 'Today !' : daysDiff === 1 ? 'Tomorrow' : `In ${Math.max(daysDiff || 0, 0)} days`
 
   return (
@@ -484,11 +480,24 @@ function PickupBanner({ pickup, pickupError, onRetry }) {
       <CalendarDays size={20} />
       <p className="text-[11px] font-extrabold uppercase">Next Event:</p>
       <p className="mono text-[15px] font-bold">
-        {nextDate ? format(nextDate, 'EEEE, MMMM d').toUpperCase() : 'NO EVENT SCHEDULED'}
+        {eventTitle ? eventTitle.toUpperCase() : nextDate ? format(nextDate, 'EEEE, MMMM d').toUpperCase() : 'NO EVENT SCHEDULED'}
       </p>
       <span className={`stamp ml-auto ${stampClass}`}>{stampText}</span>
     </div>
   )
+}
+
+function parseEventTitle(notes) {
+  if (!notes) return ''
+  if (typeof notes === 'string' && notes.startsWith('LT_EVENT:')) {
+    try {
+      const parsed = JSON.parse(notes.slice('LT_EVENT:'.length))
+      return String(parsed?.title || '').trim()
+    } catch (_error) {
+      return ''
+    }
+  }
+  return ''
 }
 
 function QuickAction({ icon: Icon, label, onClick }) {
@@ -510,7 +519,7 @@ function StorageCard({ room, onShowQr, admin = false, infoOnly = false, classNam
       ? { label: 'CRITICAL', className: 'stamp-red' }
       : room.total_bundles <= room.low_threshold
         ? { label: 'LOW', className: 'stamp-amber' }
-        : { label: 'GOOD', className: 'stamp-green' }
+        : { label: 'GOOD', className: 'stamp-blue' }
 
   const notCountedToday = !room.last_count_time || !isToday(parseISO(room.last_count_time))
   return (
@@ -556,7 +565,7 @@ function LaundryLoadsPanel({ loads, loading, error, onRetry, onNewLoad, onComple
   const activeCount = loads.length
   const countBadgeClass =
     activeCount === 0
-      ? 'stamp-green'
+      ? 'stamp-blue'
       : activeCount >= SETTINGS.laundry.maxConcurrentLoads
         ? 'stamp-red'
         : 'stamp-amber'
@@ -628,9 +637,9 @@ function TasksDrawer({
 
   return (
     <div className={`fixed inset-0 z-50 transition-opacity duration-200 ${overlayStateClass}`}>
-      <button type="button" className="absolute inset-0 bg-black/45" onClick={onClose} aria-label="Close tasks panel" />
+      <button type="button" className="absolute inset-0 bg-ink/45" onClick={onClose} aria-label="Close tasks panel" />
       <aside
-        className={`absolute right-0 top-0 h-full w-full max-w-[430px] border-l-[2.5px] border-ink bg-cream shadow-[-6px_0_0_#0A0A0A] transition-transform duration-250 ${panelStateClass}`}
+        className={`absolute right-0 top-0 h-full w-full max-w-[430px] border-l-[2.5px] border-ink bg-cream shadow-[-6px_0_0_#001A57] transition-transform duration-250 ${panelStateClass}`}
       >
         <div className="flex h-full flex-col">
           <div className="border-b-[2.5px] border-ink bg-white px-4 py-4">
@@ -645,7 +654,7 @@ function TasksDrawer({
             </div>
             <div className="mt-3 flex items-center gap-2">
               <span className="stamp stamp-amber">{inProgressTasks.length} ON GOING</span>
-              <span className="stamp stamp-green">{completeTasks.length} COMPLETED</span>
+              <span className="stamp stamp-blue">{completeTasks.length} COMPLETED</span>
               <span className="stamp stamp-gray">{pendingTasks.length} NOT STARTED</span>
             </div>
           </div>
@@ -719,7 +728,7 @@ function TaskRow({ task, onCycleStatus, readOnly = false }) {
       {readOnly ? (
         <span
           className={`stamp ${task.status === 'complete'
-              ? 'stamp-green'
+              ? 'stamp-blue'
               : task.status === 'in_progress'
                 ? 'stamp-amber'
                 : 'stamp-gray'
@@ -734,7 +743,7 @@ function TaskRow({ task, onCycleStatus, readOnly = false }) {
           className={`h-7 w-7 border-2 border-ink ${task.status === 'complete'
               ? 'bg-ink text-white'
               : task.status === 'in_progress'
-                ? 'bg-[linear-gradient(to_right,#0A0A0A_50%,#FFFFFF_50%)]'
+                ? 'bg-[linear-gradient(to_right,#001A57_50%,#FFFFFF_50%)]'
                 : 'bg-white'
             }`}
         >
@@ -756,7 +765,7 @@ function TaskRow({ task, onCycleStatus, readOnly = false }) {
 
 function QRModal({ room, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
       <div className="brutal-card w-full max-w-[320px] bg-white p-8 text-center">
         <p className="mb-3 text-[18px] font-extrabold">{room.name.toUpperCase()}</p>
         <div className="mx-auto mb-3 w-fit border-2 border-ink p-2">
@@ -773,7 +782,7 @@ function QRModal({ room, onClose }) {
 
 function LinenBreakdownModal({ total, byRoom, byItem, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
       <div className="brutal-card w-full max-w-[680px] bg-white p-5 sm:p-6">
         <div className="mb-4 flex items-center justify-between">
           <div>

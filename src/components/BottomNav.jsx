@@ -4,14 +4,12 @@ import {
   LayoutDashboard,
   Package,
   Users,
-  Waves,
 } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 const staffTabs = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
   { label: 'Inventory', icon: Package, to: '/inventory' },
-  { label: 'Laundry', icon: Waves, to: '/dashboard#laundry' },
   { label: 'Tasks', icon: CheckSquare, to: '/staff-todos' },
   { label: 'Events', icon: CalendarDays, to: '/events' },
 ]

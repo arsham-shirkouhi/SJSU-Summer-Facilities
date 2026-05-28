@@ -278,7 +278,7 @@ export default function AdminPickupCalendar({
                       ? 'border-[#E8E4DC] bg-[#E8E4DC] text-[#6B6B6B]'
                       : 'border-ink bg-ink text-white'
                     : 'border-[#E8E4DC] bg-white'
-                    } ${isTodayDate ? 'border-[2.5px] border-ink font-extrabold' : 'border-[1.5px]'} ${!hasEvents && !isPast ? 'hover:border-primary hover:bg-[#C8F5E5]' : ''}`}
+                    } ${isTodayDate ? 'border-[2.5px] border-ink font-extrabold' : 'border-[1.5px]'} ${!hasEvents && !isPast ? 'hover:border-primary hover:bg-[#DCE7FF]' : ''}`}
                 >
                   <div className="flex h-full flex-col items-center justify-center px-1">
                     <span className="mono text-[14px] font-bold">{format(date, 'd')}</span>
@@ -304,7 +304,7 @@ export default function AdminPickupCalendar({
       </div>
 
       {showAddEvent && !readOnly ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
           <div className="brutal-card w-full max-w-[640px] bg-white p-5">
             <div className="mb-3 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
               <div>
@@ -492,12 +492,12 @@ function EventDetailsDrawer({ date, entries, open, onClose }) {
     <div className={`fixed inset-0 z-50 transition-opacity duration-200 ${overlayStateClass}`}>
       <button
         type="button"
-        className="absolute inset-0 bg-black/40"
+        className="absolute inset-0 bg-ink/40"
         aria-label="Close event details"
         onClick={onClose}
       />
       <aside
-        className={`absolute right-0 top-0 h-full w-full max-w-[420px] border-l-[2.5px] border-ink bg-cream shadow-[-6px_0_0_#0A0A0A] transition-transform duration-200 ${panelStateClass}`}
+        className={`absolute right-0 top-0 h-full w-full max-w-[420px] border-l-[2.5px] border-ink bg-cream shadow-[-6px_0_0_#001A57] transition-transform duration-200 ${panelStateClass}`}
       >
         <div className="flex h-full flex-col">
           <div className="border-b-[2.5px] border-ink bg-white px-4 py-4">

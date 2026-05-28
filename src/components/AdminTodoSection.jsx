@@ -109,7 +109,7 @@ export default function AdminTodoSection() {
       className={`h-[26px] w-[26px] border-2 border-ink ${status.status === 'complete'
           ? 'bg-ink text-white'
           : status.status === 'in_progress'
-            ? 'bg-[linear-gradient(to_right,#0A0A0A_50%,#FFFFFF_50%)]'
+            ? 'bg-[linear-gradient(to_right,#001A57_50%,#FFFFFF_50%)]'
             : 'bg-white'
         }`}
     >
@@ -215,8 +215,8 @@ export default function AdminTodoSection() {
         </div>
       ) : (
         <div>
-          <Section keyName="ongoing" label="ONGOING" color="#1D9E75" tasksInGroup={grouped.ongoing} />
-          <Section keyName="notStarted" label="NOT STARTED" color="#0A0A0A" tasksInGroup={grouped.notStarted} />
+          <Section keyName="ongoing" label="ONGOING" color="#0038A7" tasksInGroup={grouped.ongoing} />
+          <Section keyName="notStarted" label="NOT STARTED" color="#001A57" tasksInGroup={grouped.notStarted} />
           <Section keyName="complete" label="COMPLETE" color="#6B6B6B" tasksInGroup={grouped.complete} />
         </div>
       )}

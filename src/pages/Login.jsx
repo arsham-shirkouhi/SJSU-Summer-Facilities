@@ -33,74 +33,17 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-cream">
-      <div className="hidden min-h-screen md:flex">
-        <aside className="flex w-[42%] flex-col justify-between bg-ink p-12">
-          <div>
-            <h1 className="text-[72px] font-extrabold leading-[0.9] text-white">
-              LINEN
-              <br />
-              TRACK
-            </h1>
-            <div className="my-6 h-0.5 w-full bg-white" />
-
-            <div className="flex items-center justify-between gap-3">
-              {[
-                ['9', 'Locations'],
-                ['5', 'Items'],
-                ['3', 'Storage Rooms'],
-              ].map(([value, label], index) => (
-                <div key={label} className="flex flex-1 items-center justify-center gap-3">
-                  {index > 0 && <div className="h-11 w-px bg-white/40" />}
-                  <div>
-                    <p className="mono text-[22px] font-bold text-white">{value}</p>
-                    <p className="text-[10px] uppercase tracking-[0.09em] text-white/60">{label}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <svg viewBox="0 0 360 240" className="w-full max-w-[340px]" fill="none">
-            <rect x="34" y="54" width="220" height="40" stroke="white" strokeWidth="2.5" />
-            <line x1="44" y1="67" x2="244" y2="67" stroke="white" strokeWidth="1.4" />
-            <line x1="44" y1="78" x2="220" y2="78" stroke="white" strokeWidth="1.4" />
-
-            <rect x="52" y="94" width="220" height="40" stroke="white" strokeWidth="2.5" />
-            <line x1="62" y1="107" x2="252" y2="107" stroke="white" strokeWidth="1.4" />
-            <line x1="62" y1="118" x2="232" y2="118" stroke="white" strokeWidth="1.4" />
-
-            <rect x="70" y="134" width="220" height="40" stroke="white" strokeWidth="2.5" />
-            <line x1="80" y1="147" x2="270" y2="147" stroke="white" strokeWidth="1.4" />
-            <line x1="80" y1="158" x2="252" y2="158" stroke="white" strokeWidth="1.4" />
-
-            <rect x="282" y="151" width="48" height="24" stroke="white" strokeWidth="2.5" />
-            <text x="292" y="168" fontSize="12" fontWeight="700" fill="white">
-              SJSU
-            </text>
-          </svg>
-        </aside>
-
-        <section className="flex w-[58%] items-center justify-center bg-cream p-12">
-          <LoginCard
-            email={email}
-            password={password}
-            showPassword={showPassword}
-            loading={loading}
-            error={error}
-            onEmailChange={setEmail}
-            onPasswordChange={setPassword}
-            onTogglePassword={() => setShowPassword((value) => !value)}
-            onSubmit={handleSubmit}
-            signedInEmail={user?.email}
-            signedInName={profile?.full_name}
-            onContinueToDashboard={() => navigate('/dashboard', { replace: true })}
-            onSignOutCurrent={handleSignOutCurrent}
-          />
-        </section>
+    <div className="relative min-h-screen overflow-hidden bg-cream">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(0,26,87,0.24),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(0,56,167,0.22),transparent_42%),radial-gradient(circle_at_50%_95%,rgba(0,26,87,0.2),transparent_45%)]" />
+        <div className="absolute -left-20 -top-20 h-80 w-80 rounded-full border-[2.5px] border-ink/30 bg-primary-light/55" />
+        <div className="absolute -right-24 top-8 h-96 w-96 rounded-full border-[2.5px] border-ink/30 bg-primary-light/45" />
+        <div className="absolute bottom-[-72px] left-1/2 h-64 w-[620px] -translate-x-1/2 rounded-t-[130px] border-[2.5px] border-ink/20 bg-primary-light/35" />
+        <div className="absolute left-10 top-1/3 h-28 w-28 rotate-12 border-[2.5px] border-ink/25 bg-white/40" />
+        <div className="absolute bottom-24 right-10 h-24 w-24 -rotate-6 border-[2.5px] border-ink/25 bg-amber-light/45" />
       </div>
 
-      <div className="mx-auto flex min-h-screen w-full max-w-[440px] items-center px-5 py-8 md:hidden">
+      <div className="relative mx-auto flex min-h-screen w-full max-w-[620px] items-center px-5 py-8">
         <LoginCard
           email={email}
           password={password}
@@ -139,11 +82,11 @@ function LoginCard({
   return (
     <form
       onSubmit={onSubmit}
-      className="brutal-card relative w-full bg-white p-6 md:p-9"
+      className="brutal-card relative w-full bg-white p-7 md:p-10"
       autoComplete="off"
     >
       <div className="mb-6">
-        <span className="stamp stamp-green inline-block -rotate-2">Staff Login</span>
+        <span className="stamp stamp-amber inline-block -rotate-2">Staff Login</span>
       </div>
 
       <h2 className="text-[30px] font-extrabold text-ink">Welcome back.</h2>
@@ -181,9 +124,9 @@ function LoginCard({
         <label className="block">
           <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em]">Email Address</div>
           <div className="relative">
-            <Mail size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2" />
+            <Mail size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/80" />
             <input
-              className="brutal-input pl-10"
+              className="brutal-input !pl-12"
               type="email"
               value={email}
               onChange={(event) => onEmailChange(event.target.value)}
@@ -195,9 +138,9 @@ function LoginCard({
         <label className="block">
           <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em]">Password</div>
           <div className="relative">
-            <Lock size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2" />
+            <Lock size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/80" />
             <input
-              className="brutal-input pl-10 pr-10"
+              className="brutal-input !pl-12 !pr-12"
               type={showPassword ? 'text' : 'password'}
               value={password}
               onChange={(event) => onPasswordChange(event.target.value)}
@@ -205,7 +148,7 @@ function LoginCard({
             />
             <button
               type="button"
-              className="absolute right-3 top-1/2 -translate-y-1/2"
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-ink/80"
               onClick={onTogglePassword}
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -233,16 +176,16 @@ function LoginCard({
       </p>
 
       <svg viewBox="0 0 60 80" className="absolute -bottom-2.5 -right-2.5 h-20 w-[60px]" fill="none">
-        <path d="M6 8H54V74H6V8Z" fill="#F5F0E8" stroke="#0A0A0A" strokeWidth="2" />
-        <path d="M22 8C22 3.5 26 2 30 2C34 2 38 3.5 38 8" stroke="#0A0A0A" strokeWidth="2" />
-        <circle cx="30" cy="12" r="3.5" stroke="#0A0A0A" strokeWidth="2" />
+        <path d="M6 8H54V74H6V8Z" fill="#F5F0E8" stroke="#001A57" strokeWidth="2" />
+        <path d="M22 8C22 3.5 26 2 30 2C34 2 38 3.5 38 8" stroke="#001A57" strokeWidth="2" />
+        <circle cx="30" cy="12" r="3.5" stroke="#001A57" strokeWidth="2" />
         <text
           x="43"
           y="20"
           transform="rotate(90 43 20)"
           fontSize="7"
           fontWeight="700"
-          fill="#0A0A0A"
+          fill="#001A57"
         >
           SJSU HOUSING
         </text>

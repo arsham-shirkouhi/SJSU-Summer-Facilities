@@ -22,7 +22,7 @@ export default function TopBar() {
             <div className="mono text-[10px] text-white/60">{user?.email || 'No email'} · ROLE: {roleLabel}</div>
           </div>
           {normalizedRole === 'admin' ? (
-            <span className="border-[1.5px] border-primary bg-primary px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.08em] text-white">
+            <span className="border-[1.5px] border-amber bg-amber px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.08em] text-ink">
               Admin View
             </span>
           ) : null}

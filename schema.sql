@@ -161,6 +161,7 @@ create table tasks (
   id uuid primary key default gen_random_uuid(),
   title text not null,
   details text,
+  subtasks jsonb not null default '[]'::jsonb,
   assigned_date date not null default current_date,
   status text default 'pending',
   priority text not null default 'medium' check (priority in ('low', 'medium', 'high')),

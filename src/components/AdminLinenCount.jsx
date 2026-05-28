@@ -87,7 +87,7 @@ export default function AdminLinenCount() {
             return (
               <div
                 key={roomName}
-                className="group brutal-card bg-white p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_5px_0_#0A0A0A] active:translate-y-0.5 active:shadow-[2px_2px_0_#0A0A0A]"
+                className="group brutal-card bg-white p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_5px_0_#001A57] active:translate-y-0.5 active:shadow-[2px_2px_0_#001A57]"
               >
                 <div className="mb-1 flex items-start justify-between gap-2">
                   <p className="text-[12px] font-extrabold uppercase">{roomName}</p>

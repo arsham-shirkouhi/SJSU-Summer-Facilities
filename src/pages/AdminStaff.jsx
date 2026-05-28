@@ -122,7 +122,7 @@ export default function AdminStaff() {
         </section>
       </main>
       {showCreateForm ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
           <div className="brutal-card w-full max-w-[640px] bg-white p-5">
             <div className="mb-3 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
               <div>

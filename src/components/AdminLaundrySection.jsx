@@ -34,7 +34,7 @@ export default function AdminLaundrySection() {
   }, [])
 
   const activeCount = loads.length
-  const activeStampClass = activeCount === 0 ? 'stamp-black' : 'stamp-amber'
+  const activeStampClass = activeCount === 0 ? 'stamp-ink' : 'stamp-amber'
   const activeMachineNumbers = useMemo(() => loads.map((load) => load.machine_number), [loads])
 
   const handleComplete = async (id) => {

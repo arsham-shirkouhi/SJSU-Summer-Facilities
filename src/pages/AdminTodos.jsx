@@ -7,7 +7,7 @@ import TopBar from '../components/TopBar'
 import BottomNav from '../components/BottomNav'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../supabase'
-import { deleteTask, getAllTasksForToday, insertTask, updateTaskStatus } from '../lib/queries'
+import { deleteTask, getAllTasksForToday, insertTask, updateTask, updateTaskStatus } from '../lib/queries'
 
 const COLUMN_CONFIG = [
   { key: 'pending', label: 'NOT STARTED', border: 'border-l-danger' },
@@ -21,12 +21,42 @@ const PRIORITY_STYLES = {
   high: { label: 'HIGH', className: 'bg-danger text-white' },
 }
 
+const normalizeSubtasks = (rawSubtasks) => {
+  if (!Array.isArray(rawSubtasks)) return []
+  return rawSubtasks
+    .map((subtask, index) => {
+      if (typeof subtask === 'string') {
+        const text = subtask.trim()
+        if (!text) return null
+        return { text, done: false }
+      }
+      if (subtask && typeof subtask === 'object') {
+        const text = String(subtask.text || subtask.title || subtask.label || '').trim()
+        if (!text) return null
+        return {
+          text,
+          done: Boolean(subtask.done ?? subtask.completed),
+        }
+      }
+      const text = String(subtask || '').trim()
+      if (!text) return null
+      return { text, done: false, index }
+    })
+    .filter(Boolean)
+}
+
+const normalizeTask = (task) => ({
+  ...task,
+  subtasks: normalizeSubtasks(task.subtasks),
+})
+
 export default function AdminTodos() {
   const { user, profile } = useAuth()
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddTask, setShowAddTask] = useState(false)
-  const [newTask, setNewTask] = useState({ title: '', details: '', priority: 'medium' })
+  const [newTask, setNewTask] = useState({ title: '', details: '', priority: 'medium', subtasks: [] })
+  const [subtaskDraft, setSubtaskDraft] = useState('')
   const [draggingTaskId, setDraggingTaskId] = useState(null)
   const [dragOriginStatus, setDragOriginStatus] = useState(null)
   const [dragOverStatus, setDragOverStatus] = useState(null)
@@ -43,7 +73,8 @@ export default function AdminTodos() {
   const refetchTasks = async () => {
     try {
       setLoading(true)
-      setTasks(await getAllTasksForToday())
+      const fetched = await getAllTasksForToday()
+      setTasks((fetched || []).map(normalizeTask))
     } catch (error) {
       toast.error(error.message || 'Failed to load tasks')
     } finally {
@@ -102,6 +133,7 @@ export default function AdminTodos() {
       const created = await insertTask({
         title: newTask.title,
         details: newTask.details || null,
+        subtasks: normalizeSubtasks(newTask.subtasks),
         assigned_date: format(new Date(), 'yyyy-MM-dd'),
         status: 'pending',
         priority: newTask.priority,
@@ -109,8 +141,9 @@ export default function AdminTodos() {
         creator_name: profile?.full_name || user?.email || 'Admin',
         created_by: user?.id || null,
       })
-      setTasks((current) => [created, ...current])
-      setNewTask({ title: '', details: '', priority: 'medium' })
+      setTasks((current) => [normalizeTask(created), ...current])
+      setNewTask({ title: '', details: '', priority: 'medium', subtasks: [] })
+      setSubtaskDraft('')
       setShowAddTask(false)
       toast.success('Task added')
     } catch (error) {
@@ -127,6 +160,41 @@ export default function AdminTodos() {
     } catch (error) {
       setTasks(previous)
       toast.error(error.message || 'Failed to delete task')
+    }
+  }
+
+  const addDraftSubtask = () => {
+    const text = subtaskDraft.trim()
+    if (!text) return
+    setNewTask((current) => ({
+      ...current,
+      subtasks: [...current.subtasks, { text, done: false }],
+    }))
+    setSubtaskDraft('')
+  }
+
+  const removeDraftSubtask = (indexToRemove) => {
+    setNewTask((current) => ({
+      ...current,
+      subtasks: current.subtasks.filter((_, index) => index !== indexToRemove),
+    }))
+  }
+
+  const toggleSubtask = async (task, subtaskIndex) => {
+    const previousSubtasks = normalizeSubtasks(task.subtasks)
+    const nextSubtasks = previousSubtasks.map((subtask, index) =>
+      index === subtaskIndex ? { ...subtask, done: !subtask.done } : subtask,
+    )
+    setTasks((current) =>
+      current.map((row) => (row.id === task.id ? { ...row, subtasks: nextSubtasks } : row)),
+    )
+    try {
+      await updateTask(task.id, { subtasks: nextSubtasks })
+    } catch (error) {
+      setTasks((current) =>
+        current.map((row) => (row.id === task.id ? { ...row, subtasks: previousSubtasks } : row)),
+      )
+      toast.error(error.message || 'Failed to save subtask')
     }
   }
 
@@ -259,6 +327,28 @@ export default function AdminTodos() {
                             {task.title}
                           </p>
                           {task.details ? <p className="text-[12px] text-[#6B6B6B]">{task.details}</p> : null}
+                          {task.subtasks?.length ? (
+                            <div className="mt-2 space-y-1.5">
+                              <p className="mono text-[10px] text-[#6B6B6B]">
+                                {task.subtasks.filter((subtask) => subtask.done).length}/{task.subtasks.length} subtasks done
+                              </p>
+                              {task.subtasks.map((subtask, index) => (
+                                <label
+                                  key={`${task.id}-subtask-${index}-${subtask.text}`}
+                                  className="flex items-center gap-2 text-[11px]"
+                                  onClick={(event) => event.stopPropagation()}
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(subtask.done)}
+                                    onChange={() => toggleSubtask(task, index)}
+                                  />
+                                  <span className={subtask.done ? 'line-through opacity-60' : ''}>{subtask.text}</span>
+                                </label>
+                              ))}
+                            </div>
+                          ) : null}
                           <p className="mono text-[10px] text-[#6B6B6B]">
                             {task.creator_name || 'Unknown'} · {task.created_at ? format(new Date(task.created_at), 'h:mm a') : '--'}
                           </p>
@@ -283,7 +373,7 @@ export default function AdminTodos() {
         )}
       </main>
       {showAddTask && isAdmin ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
           <div className="brutal-card w-full max-w-[640px] bg-white p-5">
             <div className="mb-3 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
               <div>
@@ -312,6 +402,42 @@ export default function AdminTodos() {
                 value={newTask.details}
                 onChange={(event) => setNewTask((state) => ({ ...state, details: event.target.value }))}
               />
+              <div className="mb-3">
+                <p className="mb-1 text-[10px] font-bold uppercase">Subtasks</p>
+                <div className="flex gap-2">
+                  <input
+                    className="brutal-input"
+                    placeholder="Add subtask"
+                    value={subtaskDraft}
+                    onChange={(event) => setSubtaskDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        addDraftSubtask()
+                      }
+                    }}
+                  />
+                  <button type="button" className="brutal-btn bg-white px-3 text-[11px]" onClick={addDraftSubtask}>
+                    + Add
+                  </button>
+                </div>
+                {newTask.subtasks.length ? (
+                  <div className="mt-2 space-y-1.5">
+                    {newTask.subtasks.map((subtask, index) => (
+                      <div key={`new-subtask-${index}-${subtask.text}`} className="flex items-center justify-between border border-stone bg-cream px-2 py-1.5">
+                        <span className="text-[11px]">{subtask.text}</span>
+                        <button
+                          type="button"
+                          className="text-[10px] font-bold text-danger"
+                          onClick={() => removeDraftSubtask(index)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <div className="mb-3">
                 <p className="mb-1 text-[10px] font-bold uppercase">Priority</p>
                 <div className="flex gap-2">

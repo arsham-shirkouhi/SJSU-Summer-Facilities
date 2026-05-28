@@ -103,7 +103,7 @@ export default function NewLoadModal({
 
   return (
     <div className="fixed inset-0 z-[60]">
-      <button className="absolute inset-0 bg-black/50" onClick={handleClose} aria-label="Close modal" />
+      <button className="absolute inset-0 bg-ink/50" onClick={handleClose} aria-label="Close modal" />
 
       <div className="absolute inset-x-0 bottom-0 md:flex md:inset-0 md:items-center md:justify-center md:p-4">
         <form
