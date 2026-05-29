@@ -8,6 +8,7 @@ import Inventory from './pages/Inventory'
 import AdminTodos from './pages/AdminTodos'
 import AdminSchedule from './pages/AdminSchedule'
 import AdminStaff from './pages/AdminStaff'
+import AdminRacks from './pages/AdminRacks'
 import Profile from './pages/Profile'
 import StaffEvents from './pages/StaffEvents'
 
@@ -61,6 +62,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <AdminStaff />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin-racks"
+        element={
+          <ProtectedRoute>
+            <AdminRacks />
           </ProtectedRoute>
         }
       />

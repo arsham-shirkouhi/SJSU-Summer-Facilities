@@ -13,6 +13,7 @@ drop table if exists laundry_loads cascade;
 drop table if exists laundry_cycle_reports cascade;
 drop table if exists log_entries cascade;
 drop table if exists balances cascade;
+drop table if exists shelf_items cascade;
 drop table if exists shelves cascade;
 drop table if exists location_linen_totals cascade;
 drop table if exists tasks cascade;
@@ -41,53 +42,77 @@ create table user_access_roles (
   created_at timestamptz default now()
 );
 
+-- ============================================================
+-- INVENTORY MODEL
+-- locations    -> storage rooms (Mailroom, P1 Storage, etc.)
+-- shelves      -> racks inside a room (add more over time)
+-- shelf_items  -> which linen items belong on each rack
+-- balances     -> live bundle count per rack + item
+-- location_linen_totals -> room-level rollup for dashboard views
+-- ============================================================
+
 -- locations (storage rooms)
 create table locations (
   id uuid primary key default gen_random_uuid(),
-  name text not null,
-  mode text not null default 'full',
+  name text not null unique,
+  mode text not null default 'full' check (mode in ('full', 'partial')),
   building text,
-  is_active boolean default true,
+  is_active boolean not null default true,
   low_threshold integer default 15,
   critical_threshold integer default 5,
   created_at timestamptz default now()
 );
 
--- items (linen types)
+-- items (linen types shared across all rooms/racks)
 create table items (
   id uuid primary key default gen_random_uuid(),
-  name text not null,
+  name text not null unique,
   label text not null,
-  is_active boolean default true
+  is_active boolean not null default true,
+  created_at timestamptz default now()
 );
 
--- shelves (within each storage room)
+-- shelves / racks (belong to exactly one storage room)
 create table shelves (
   id uuid primary key default gen_random_uuid(),
-  location_id uuid references locations on delete cascade,
+  location_id uuid not null references locations on delete cascade,
   name text not null,
-  created_at timestamptz default now()
+  qr_slug text unique,
+  is_active boolean not null default true,
+  created_at timestamptz default now(),
+  unique(location_id, name)
+);
+
+-- shelf_items (configure which items can be stored on each rack)
+create table shelf_items (
+  id uuid primary key default gen_random_uuid(),
+  shelf_id uuid not null references shelves on delete cascade,
+  item_id uuid not null references items on delete cascade,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  created_at timestamptz default now(),
+  unique(shelf_id, item_id)
 );
 
 -- location linen totals (quick count snapshot per room)
 create table location_linen_totals (
   id uuid primary key default gen_random_uuid(),
   location_id uuid not null unique references locations on delete cascade,
-  linen integer not null default 0,
-  face_hand_towel integer not null default 0,
-  body_towel integer not null default 0,
-  pillow_case integer not null default 0,
+  linen integer not null default 0 check (linen >= 0),
+  face_hand_towel integer not null default 0 check (face_hand_towel >= 0),
+  body_towel integer not null default 0 check (body_towel >= 0),
+  pillow_case integer not null default 0 check (pillow_case >= 0),
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 
--- balances (bundle count per shelf per item)
+-- balances (current bundle count for each rack + item pairing)
 create table balances (
   id uuid primary key default gen_random_uuid(),
-  shelf_id uuid references shelves on delete cascade,
-  location_id uuid references locations,
-  item_id uuid references items,
-  current_balance integer default 0,
+  shelf_id uuid not null references shelves on delete cascade,
+  location_id uuid not null references locations on delete cascade,
+  item_id uuid not null references items on delete cascade,
+  current_balance integer not null default 0 check (current_balance >= 0),
   updated_at timestamptz default now(),
   unique(shelf_id, item_id)
 );
@@ -215,6 +240,9 @@ create index if not exists idx_laundry_loads_started_at on laundry_loads(started
 create index if not exists idx_laundry_cycle_reports_week_start on laundry_cycle_reports(week_start);
 create index if not exists idx_laundry_cycle_reports_completed_at on laundry_cycle_reports(completed_at desc);
 create index if not exists idx_shelves_location_id on shelves(location_id);
+create index if not exists idx_shelves_qr_slug on shelves(qr_slug);
+create index if not exists idx_shelf_items_shelf_id on shelf_items(shelf_id);
+create index if not exists idx_shelf_items_item_id on shelf_items(item_id);
 create index if not exists idx_location_linen_totals_location_id on location_linen_totals(location_id);
 
 -- enable RLS
@@ -222,6 +250,7 @@ alter table profiles enable row level security;
 alter table locations enable row level security;
 alter table items enable row level security;
 alter table balances enable row level security;
+alter table shelf_items enable row level security;
 alter table shelves enable row level security;
 alter table log_entries enable row level security;
 alter table tasks enable row level security;
@@ -245,6 +274,11 @@ drop policy if exists "Authenticated users can read balances" on balances;
 drop policy if exists "Authenticated users can update balances" on balances;
 drop policy if exists "Authenticated users can insert balances" on balances;
 drop policy if exists "Authenticated users can read shelves" on shelves;
+drop policy if exists "Authenticated users can insert shelves" on shelves;
+drop policy if exists "Authenticated users can update shelves" on shelves;
+drop policy if exists "Authenticated users can read shelf items" on shelf_items;
+drop policy if exists "Authenticated users can insert shelf items" on shelf_items;
+drop policy if exists "Authenticated users can update shelf items" on shelf_items;
 drop policy if exists "Authenticated users can read log entries" on log_entries;
 drop policy if exists "Authenticated users can insert log entries" on log_entries;
 drop policy if exists "Authenticated users can read tasks" on tasks;
@@ -486,9 +520,30 @@ create policy "Authenticated users can insert balances"
   on balances for insert
   with check (auth.role() = 'authenticated');
 
--- shelves: all authenticated users can read
+-- shelves / racks: authenticated users can read and manage
 create policy "Authenticated users can read shelves"
   on shelves for select
+  using (auth.role() = 'authenticated');
+
+create policy "Authenticated users can insert shelves"
+  on shelves for insert
+  with check (auth.role() = 'authenticated');
+
+create policy "Authenticated users can update shelves"
+  on shelves for update
+  using (auth.role() = 'authenticated');
+
+-- shelf_items: configure which items belong on each rack
+create policy "Authenticated users can read shelf items"
+  on shelf_items for select
+  using (auth.role() = 'authenticated');
+
+create policy "Authenticated users can insert shelf items"
+  on shelf_items for insert
+  with check (auth.role() = 'authenticated');
+
+create policy "Authenticated users can update shelf items"
+  on shelf_items for update
   using (auth.role() = 'authenticated');
 
 -- log entries: authenticated users can read and insert
@@ -624,6 +679,29 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
 
+-- when an item is assigned to a rack, ensure a zero balance row exists
+create or replace function public.ensure_shelf_item_balance()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.balances (shelf_id, location_id, item_id, current_balance)
+  select new.shelf_id, s.location_id, new.item_id, 0
+  from public.shelves s
+  where s.id = new.shelf_id
+  on conflict (shelf_id, item_id) do nothing;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists shelf_items_create_balance on shelf_items;
+create trigger shelf_items_create_balance
+  after insert on shelf_items
+  for each row execute procedure public.ensure_shelf_item_balance();
+
 -- seed locations
 insert into locations (name, mode, building) values
 ('Mailroom linen', 'full', 'Storage'),
@@ -632,42 +710,9 @@ insert into locations (name, mode, building) values
 ('P1 Storage', 'full', 'Storage'),
 ('SVP', 'full', 'Storage');
 
--- seed location linen totals (one row per location with starter counts)
+-- seed location linen totals (start at zero; counts come from rack balances)
 insert into location_linen_totals (location_id, linen, face_hand_towel, body_towel, pillow_case)
-select
-  id,
-  case
-    when name = 'Mailroom linen' then 120
-    when name = 'Joe west linen' then 95
-    when name = 'CVA OHG' then 78
-    when name = 'P1 Storage' then 64
-    when name = 'SVP' then 88
-    else 0
-  end as linen,
-  case
-    when name = 'Mailroom linen' then 80
-    when name = 'Joe west linen' then 60
-    when name = 'CVA OHG' then 52
-    when name = 'P1 Storage' then 45
-    when name = 'SVP' then 57
-    else 0
-  end as face_hand_towel,
-  case
-    when name = 'Mailroom linen' then 70
-    when name = 'Joe west linen' then 58
-    when name = 'CVA OHG' then 49
-    when name = 'P1 Storage' then 40
-    when name = 'SVP' then 54
-    else 0
-  end as body_towel,
-  case
-    when name = 'Mailroom linen' then 110
-    when name = 'Joe west linen' then 86
-    when name = 'CVA OHG' then 72
-    when name = 'P1 Storage' then 59
-    when name = 'SVP' then 79
-    else 0
-  end as pillow_case
+select id, 0, 0, 0, 0
 from locations;
 
 -- seed items
@@ -676,7 +721,38 @@ insert into items (name, label) values
 ('pillowcases', 'Pillowcases'),
 ('bath_towels', 'Bath Towels'),
 ('hand_towels', 'Hand Towels'),
+('face_towels', 'Face Towels'),
 ('blankets', 'Blankets');
+
+-- seed starter racks for Mailroom (other rooms start empty; add racks later)
+insert into shelves (location_id, name, qr_slug)
+select l.id, rack.name, rack.qr_slug
+from locations l
+cross join (
+  values
+    ('Rack A - Towels', 'mailroom-rack-a'),
+    ('Rack B - Sheets', 'mailroom-rack-b')
+) as rack(name, qr_slug)
+where l.name = 'Mailroom linen';
+
+-- assign which items belong on each starter rack
+insert into shelf_items (shelf_id, item_id, sort_order)
+select s.id, i.id, cfg.sort_order
+from shelves s
+join locations l on l.id = s.location_id
+join (
+  values
+    ('mailroom-rack-a', 'face_towels', 1),
+    ('mailroom-rack-a', 'hand_towels', 2),
+    ('mailroom-rack-a', 'bath_towels', 3),
+    ('mailroom-rack-b', 'twin_sheets', 1),
+    ('mailroom-rack-b', 'pillowcases', 2)
+) as cfg(qr_slug, item_name, sort_order)
+  on cfg.qr_slug = s.qr_slug
+join items i on i.name = cfg.item_name
+where l.name = 'Mailroom linen';
+
+-- balances start at zero via shelf_items trigger (ensure_shelf_item_balance)
 
 -- seed fixed access roles by UID (source of truth for admin/staff app view)
 insert into user_access_roles (user_id, role) values

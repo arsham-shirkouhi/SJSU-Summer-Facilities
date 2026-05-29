@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format, formatDistanceToNowStrict } from 'date-fns'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRight, Layers } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabase'
 import { SETTINGS } from '../config/settings'
 import { getLinenCountByRoom, getStorageRooms } from '../lib/queries'
@@ -30,6 +31,7 @@ function normalizeRows(rows) {
 }
 
 export default function AdminLinenCount() {
+  const navigate = useNavigate()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [storageRooms, setStorageRooms] = useState([])
@@ -65,11 +67,21 @@ export default function AdminLinenCount() {
 
   return (
     <section className="mb-6">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <div className="inline-block bg-ink px-3.5 py-1.5 text-[12px] font-extrabold uppercase text-white">
           Linen Count
         </div>
-        <p className="mono text-[10px] text-[#6B6B6B]">{updatedText}</p>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="brutal-btn flex items-center gap-1.5 bg-amber px-3 py-1.5 text-[10px]"
+            onClick={() => navigate('/admin-racks')}
+          >
+            <Layers size={13} />
+            Manage Racks
+          </button>
+          <p className="mono text-[10px] text-[#6B6B6B]">{updatedText}</p>
+        </div>
       </div>
       {loading ? (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">

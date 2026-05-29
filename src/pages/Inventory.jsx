@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, BarChart3, Camera, ChevronRight, Minus, Package2, Plus, QrCode } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
+import {
+  ArrowLeft,
+  ArrowLeftRight,
+  BarChart3,
+  Camera,
+  ChevronRight,
+  Layers,
+  Minus,
+  Package2,
+  Plus,
+  QrCode,
+} from 'lucide-react'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import TopBar from '../components/TopBar'
 import BottomNav from '../components/BottomNav'
@@ -9,9 +20,11 @@ import { SETTINGS } from '../config/settings'
 import {
   adjustShelfItemCount,
   getItems,
+  getLocationById,
   getLocations,
   getShelvesByRoom,
   getStorageRooms,
+  transferShelfItemCount,
 } from '../lib/queries'
 
 const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OHG', 'P1 Storage', 'SVP']
@@ -28,6 +41,7 @@ const orderedRooms = (rooms) =>
 
 export default function Inventory() {
   const { profile, user } = useAuth()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const roomId = searchParams.get('room')
   const shelfId = searchParams.get('shelf')
@@ -43,6 +57,7 @@ export default function Inventory() {
   const [selectedIncrement, setSelectedIncrement] = useState(SETTINGS.inventory.countIncrements[1] || 1)
   const [submittingKey, setSubmittingKey] = useState('')
   const [showQrScanner, setShowQrScanner] = useState(false)
+  const [showTransfer, setShowTransfer] = useState(false)
 
   const fetchRooms = async () => {
     try {
@@ -83,24 +98,16 @@ export default function Inventory() {
     try {
       setDetailLoading(true)
       setDetailError('')
-      const [locations, shelves, items] = await Promise.all([
-        getLocations(),
+      const [room, shelves] = await Promise.all([
+        getLocationById(roomId),
         getShelvesByRoom(roomId),
-        getItems(),
       ])
 
-      const room = (locations || []).find((entry) => entry.id === roomId)
       if (!room) {
         setRoomDetail(null)
         setDetailError('Room not found.')
         return
       }
-
-      const allItems = (items || []).map((item) => ({
-        id: item.id,
-        name: item.name,
-        label: item.label || item.name,
-      }))
 
       const normalizedShelves = (shelves || []).map((shelf) => {
         const balanceByItemId = new Map(
@@ -113,12 +120,19 @@ export default function Inventory() {
           ]),
         )
 
-        const rows = allItems.map((item) => {
-          const balance = balanceByItemId.get(item.id)
+        const configuredItems = (shelf.shelf_items || [])
+          .filter((entry) => entry.is_active !== false)
+          .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+          .map((entry) => ({
+            item_id: entry.item_id,
+            item_name: entry.items?.name || '',
+            item_label: entry.items?.label || entry.items?.name || 'Item',
+          }))
+
+        const rows = configuredItems.map((item) => {
+          const balance = balanceByItemId.get(item.item_id)
           return {
-            item_id: item.id,
-            item_name: item.name,
-            item_label: item.label,
+            ...item,
             current_balance: Number(balance?.current_balance || 0),
           }
         })
@@ -217,7 +231,7 @@ export default function Inventory() {
     openRoom(parsed.roomId)
   }
 
-  const renderHeader = (eyebrow, title, subtitle, backAction = null, backLabel = '') => (
+  const renderHeader = (eyebrow, title, subtitle, backAction = null, backLabel = '', actions = null) => (
     <header className="mb-5 border-b-[3px] border-ink pb-3">
       {backAction ? (
         <button
@@ -233,9 +247,48 @@ export default function Inventory() {
         <Package2 size={18} />
         <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">{eyebrow}</p>
       </div>
-      <h1 className="text-[30px] font-extrabold leading-tight">{title}</h1>
-      <p className="text-[12px] uppercase tracking-[0.05em] text-[#6B6B6B]">{subtitle}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-[30px] font-extrabold leading-tight">{title}</h1>
+          <p className="text-[12px] uppercase tracking-[0.05em] text-[#6B6B6B]">{subtitle}</p>
+        </div>
+        {actions ? <div className="flex shrink-0 flex-wrap items-start justify-end gap-2">{actions}</div> : null}
+      </div>
     </header>
+  )
+
+  const normalizedRole = String(profile?.role || '').trim().toLowerCase()
+  const isAdmin = normalizedRole === 'admin'
+
+  const roomHeaderActions = (
+    <>
+      {isAdmin ? (
+        <button
+          type="button"
+          className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px]"
+          onClick={() => navigate('/admin-racks')}
+        >
+          <Layers size={14} />
+          Manage Racks
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px]"
+        onClick={() => setShowQrScanner(true)}
+      >
+        <QrCode size={14} />
+        Scan QR
+      </button>
+      <button
+        type="button"
+        className="brutal-btn flex items-center gap-1.5 bg-amber px-3 py-1.5 text-[11px]"
+        onClick={() => setShowTransfer(true)}
+      >
+        <ArrowLeftRight size={14} />
+        Transfer
+      </button>
+    </>
   )
 
   if (!roomId) {
@@ -243,17 +296,14 @@ export default function Inventory() {
       <div className="min-h-screen bg-cream">
         <TopBar />
         <main className="mx-auto w-full max-w-[1024px] px-4 pb-20 pt-20 sm:px-6 md:px-8">
-          {renderHeader('Inventory', 'Storage Rooms', 'Select a room to view racks')}
-          <div className="-mt-3 mb-4 flex justify-end">
-            <button
-              type="button"
-              className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px]"
-              onClick={() => setShowQrScanner(true)}
-            >
-              <QrCode size={14} />
-              Scan QR
-            </button>
-          </div>
+          {renderHeader(
+            'Inventory',
+            'Storage Rooms',
+            'Select a room to view racks',
+            null,
+            '',
+            roomHeaderActions,
+          )}
 
           {error ? (
             <ErrorPanel message={error} onRetry={fetchRooms} />
@@ -285,9 +335,19 @@ export default function Inventory() {
           )}
         </main>
         {showQrScanner ? (
-          <QrScannerModal
-            onClose={() => setShowQrScanner(false)}
-            onDetected={handleQrDetected}
+          <QrScannerModal onClose={() => setShowQrScanner(false)} onDetected={handleQrDetected} />
+        ) : null}
+        {showTransfer ? (
+          <TransferModal
+            rooms={normalizedRooms}
+            staffId={user?.id}
+            staffName={profile?.full_name || user?.email || 'Staff'}
+            onClose={() => setShowTransfer(false)}
+            onSuccess={() => {
+              setShowTransfer(false)
+              fetchRooms()
+              toast.success('Transfer completed')
+            }}
           />
         ) : null}
         <BottomNav role={profile?.role} />
@@ -387,6 +447,11 @@ export default function Inventory() {
             </div>
 
             <div className="space-y-2">
+              {!selectedShelf.rows.length ? (
+                <p className="text-[12px] text-[#6B6B6B]">
+                  No items assigned to this rack yet. An admin can set them up in Rack Setup.
+                </p>
+              ) : null}
               {selectedShelf.rows.map((row) => {
                 const rowKey = `${selectedShelf.id}-${row.item_id}`
                 const pending = submittingKey === rowKey
@@ -567,6 +632,275 @@ function QrScannerModal({ onClose, onDetected }) {
             Go
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
+  const [items, setItems] = useState([])
+  const [loadingMeta, setLoadingMeta] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+
+  const [fromRoomId, setFromRoomId] = useState('')
+  const [fromShelfId, setFromShelfId] = useState('')
+  const [toRoomId, setToRoomId] = useState('')
+  const [toShelfId, setToShelfId] = useState('')
+  const [itemId, setItemId] = useState('')
+  const [amount, setAmount] = useState(SETTINGS.inventory.countIncrements[1] || 5)
+
+  const [fromShelves, setFromShelves] = useState([])
+  const [toShelves, setToShelves] = useState([])
+  const [loadingFromShelves, setLoadingFromShelves] = useState(false)
+  const [loadingToShelves, setLoadingToShelves] = useState(false)
+
+  useEffect(() => {
+    const loadMeta = async () => {
+      try {
+        setLoadingMeta(true)
+        const itemRows = await getItems()
+        setItems(itemRows || [])
+      } catch (loadError) {
+        toast.error(loadError.message || 'Failed to load transfer options')
+      } finally {
+        setLoadingMeta(false)
+      }
+    }
+    loadMeta()
+  }, [])
+
+  useEffect(() => {
+    if (!fromRoomId) {
+      setFromShelves([])
+      setFromShelfId('')
+      return
+    }
+    const loadFromShelves = async () => {
+      try {
+        setLoadingFromShelves(true)
+        const shelves = await getShelvesByRoom(fromRoomId)
+        setFromShelves(shelves || [])
+        setFromShelfId('')
+        setItemId('')
+      } catch (loadError) {
+        toast.error(loadError.message || 'Failed to load source racks')
+      } finally {
+        setLoadingFromShelves(false)
+      }
+    }
+    loadFromShelves()
+  }, [fromRoomId])
+
+  useEffect(() => {
+    if (!toRoomId) {
+      setToShelves([])
+      setToShelfId('')
+      return
+    }
+    const loadToShelves = async () => {
+      try {
+        setLoadingToShelves(true)
+        const shelves = await getShelvesByRoom(toRoomId)
+        setToShelves(shelves || [])
+        setToShelfId('')
+      } catch (loadError) {
+        toast.error(loadError.message || 'Failed to load destination racks')
+      } finally {
+        setLoadingToShelves(false)
+      }
+    }
+    loadToShelves()
+  }, [toRoomId])
+
+  const selectedFromShelf = useMemo(
+    () => fromShelves.find((shelf) => shelf.id === fromShelfId) || null,
+    [fromShelves, fromShelfId],
+  )
+
+  const sourceBalance = useMemo(() => {
+    if (!selectedFromShelf || !itemId) return 0
+    const balance = (selectedFromShelf.balances || []).find((entry) => entry.item_id === itemId)
+    return Number(balance?.current_balance || 0)
+  }, [selectedFromShelf, itemId])
+
+  const selectedItem = useMemo(
+    () => items.find((item) => item.id === itemId) || null,
+    [items, itemId],
+  )
+
+  const availableItems = useMemo(() => {
+    if (!selectedFromShelf) return items
+    const balanceByItem = new Map(
+      (selectedFromShelf.balances || []).map((entry) => [entry.item_id, Number(entry.current_balance || 0)]),
+    )
+    return items.filter((item) => Number(balanceByItem.get(item.id) || 0) > 0)
+  }, [items, selectedFromShelf])
+
+  const handleTransfer = async () => {
+    if (!fromRoomId || !fromShelfId || !toRoomId || !toShelfId || !itemId) {
+      toast.error('Select source room/rack, destination room/rack, and item')
+      return
+    }
+    if (fromShelfId === toShelfId) {
+      toast.error('Source and destination racks must be different')
+      return
+    }
+    if (amount > sourceBalance) {
+      toast.error(`Only ${sourceBalance} available on source rack`)
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      await transferShelfItemCount({
+        fromShelfId,
+        fromLocationId: fromRoomId,
+        toShelfId,
+        toLocationId: toRoomId,
+        itemId,
+        quantity: amount,
+        staffId,
+        staffName,
+        itemName: selectedItem?.name,
+        itemLabel: selectedItem?.label,
+      })
+      onSuccess()
+    } catch (transferError) {
+      toast.error(transferError.message || 'Transfer failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/65 px-4 py-6">
+      <div className="brutal-card max-h-[90vh] w-full max-w-[640px] overflow-y-auto bg-white p-4 sm:p-5">
+        <div className="mb-4 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Inventory</p>
+            <p className="text-[18px] font-extrabold uppercase">Transfer Stock</p>
+          </div>
+          <button type="button" className="brutal-btn bg-white px-3 py-1.5 text-[11px]" onClick={onClose}>
+            Close ✕
+          </button>
+        </div>
+
+        {loadingMeta ? (
+          <p className="text-[12px] font-semibold">Loading transfer options...</p>
+        ) : (
+          <div className="space-y-4">
+            <section className="border-2 border-ink bg-cream p-3">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">From</p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <select
+                  className="brutal-input"
+                  value={fromRoomId}
+                  onChange={(event) => setFromRoomId(event.target.value)}
+                >
+                  <option value="">Select room</option>
+                  {rooms.map((room) => (
+                    <option key={room.id} value={room.id}>
+                      {room.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="brutal-input"
+                  value={fromShelfId}
+                  onChange={(event) => setFromShelfId(event.target.value)}
+                  disabled={!fromRoomId || loadingFromShelves}
+                >
+                  <option value="">Select rack</option>
+                  {fromShelves.map((shelf) => (
+                    <option key={shelf.id} value={shelf.id}>
+                      {shelf.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+
+            <section className="border-2 border-ink bg-cream p-3">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">To</p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <select
+                  className="brutal-input"
+                  value={toRoomId}
+                  onChange={(event) => setToRoomId(event.target.value)}
+                >
+                  <option value="">Select room</option>
+                  {rooms.map((room) => (
+                    <option key={room.id} value={room.id}>
+                      {room.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="brutal-input"
+                  value={toShelfId}
+                  onChange={(event) => setToShelfId(event.target.value)}
+                  disabled={!toRoomId || loadingToShelves}
+                >
+                  <option value="">Select rack</option>
+                  {toShelves.map((shelf) => (
+                    <option key={shelf.id} value={shelf.id}>
+                      {shelf.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+
+            <section>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">Item</p>
+              <select
+                className="brutal-input"
+                value={itemId}
+                onChange={(event) => setItemId(event.target.value)}
+                disabled={!fromShelfId}
+              >
+                <option value="">Select item</option>
+                {availableItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label || item.name}
+                  </option>
+                ))}
+              </select>
+              {itemId ? (
+                <p className="mt-1 text-[11px] font-semibold text-[#6B6B6B]">
+                  Available on source rack: <span className="mono text-ink">{sourceBalance}</span>
+                </p>
+              ) : null}
+            </section>
+
+            <section>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">Amount</p>
+              <div className="flex flex-wrap gap-2">
+                {SETTINGS.inventory.countIncrements.map((increment) => (
+                  <button
+                    key={increment}
+                    type="button"
+                    onClick={() => setAmount(increment)}
+                    className={`brutal-btn px-3 py-1.5 text-[11px] ${
+                      amount === increment ? 'bg-primary text-white' : 'bg-white'
+                    }`}
+                  >
+                    {increment}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <button
+              type="button"
+              disabled={submitting}
+              className="brutal-btn w-full bg-primary py-2.5 text-[12px] text-white"
+              onClick={handleTransfer}
+            >
+              {submitting ? 'Transferring...' : `Transfer ${amount}`}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

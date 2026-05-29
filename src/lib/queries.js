@@ -87,9 +87,10 @@ export async function adminCreateUserAccount({ email, fullName, temporaryPasswor
   }
 }
 
-export async function getLocations() {
+export async function getLocations(options = {}) {
   try {
-    if (cachedLocations) return cachedLocations
+    const fresh = Boolean(options.fresh)
+    if (cachedLocations && !fresh) return cachedLocations
     const { data, error } = await withTimeout(
       supabase
         .from('locations')
@@ -99,11 +100,34 @@ export async function getLocations() {
         .limit(100),
     )
     if (error) throw error
-    cachedLocations = data || []
-    return cachedLocations
+    const rows = data || []
+    if (rows.length) cachedLocations = rows
+    return rows
   } catch (error) {
     throw error
   }
+}
+
+export async function getLocationById(locationId) {
+  try {
+    if (!locationId) return null
+    const { data, error } = await withTimeout(
+      supabase
+        .from('locations')
+        .select('id,name,mode,building,low_threshold,critical_threshold,is_active,created_at')
+        .eq('id', locationId)
+        .eq('is_active', true)
+        .maybeSingle(),
+    )
+    if (error) throw error
+    return data
+  } catch (error) {
+    throw error
+  }
+}
+
+export function clearLocationsCache() {
+  cachedLocations = null
 }
 
 export async function getItems() {
@@ -122,37 +146,42 @@ export async function getItems() {
 
 export async function getStorageRooms() {
   try {
-    const { data: locations, error: locationsError } = await withTimeout(
-      supabase
-        .from('locations')
-        .select(
-          'id,name,building,low_threshold,critical_threshold,location_linen_totals(linen,face_hand_towel,body_towel,pillow_case,updated_at),log_entries(created_at,staff_name)',
-        )
-        .eq('is_active', true)
-        .eq('mode', 'full')
-        .order('created_at', { ascending: true })
-        .order('created_at', { ascending: false, referencedTable: 'log_entries' })
-        .limit(1, { referencedTable: 'log_entries' })
-        .limit(100),
-    )
+    const [{ data: locations, error: locationsError }, { data: balances, error: balancesError }] =
+      await Promise.all([
+        withTimeout(
+          supabase
+            .from('locations')
+            .select('id,name,building,low_threshold,critical_threshold,log_entries(created_at,staff_name)')
+            .eq('is_active', true)
+            .eq('mode', 'full')
+            .order('created_at', { ascending: true })
+            .order('created_at', { ascending: false, referencedTable: 'log_entries' })
+            .limit(1, { referencedTable: 'log_entries' })
+            .limit(100),
+        ),
+        withTimeout(
+          supabase.from('balances').select('location_id,current_balance,updated_at').limit(5000),
+        ),
+      ])
     if (locationsError) throw locationsError
+    if (balancesError) throw balancesError
+
+    const totalsByLocation = (balances || []).reduce((acc, row) => {
+      if (!row.location_id) return acc
+      if (!acc[row.location_id]) {
+        acc[row.location_id] = { total: 0, latestUpdate: null }
+      }
+      acc[row.location_id].total += Number(row.current_balance || 0)
+      const updated = row.updated_at ? new Date(row.updated_at) : null
+      if (updated && (!acc[row.location_id].latestUpdate || updated > acc[row.location_id].latestUpdate)) {
+        acc[row.location_id].latestUpdate = updated
+      }
+      return acc
+    }, {})
 
     return (locations || []).map((location) => {
-      const roomTotal = Array.isArray(location.location_linen_totals)
-        ? location.location_linen_totals[0]
-        : location.location_linen_totals
+      const roomTotals = totalsByLocation[location.id] || { total: 0, latestUpdate: null }
       const latest = Array.isArray(location.log_entries) ? location.log_entries[0] : null
-      const itemBreakdown = [
-        { label: 'Linen', quantity: Number(roomTotal?.linen || 0) },
-        { label: 'Face/Hand Towel', quantity: Number(roomTotal?.face_hand_towel || 0) },
-        { label: 'Body Towel', quantity: Number(roomTotal?.body_towel || 0) },
-        { label: 'Pillow Case', quantity: Number(roomTotal?.pillow_case || 0) },
-      ].filter((item) => item.quantity > 0)
-      const totalBundles =
-        Number(roomTotal?.linen || 0) +
-        Number(roomTotal?.face_hand_towel || 0) +
-        Number(roomTotal?.body_towel || 0) +
-        Number(roomTotal?.pillow_case || 0)
 
       return {
         id: location.id,
@@ -160,10 +189,10 @@ export async function getStorageRooms() {
         building: location.building,
         low_threshold: location.low_threshold,
         critical_threshold: location.critical_threshold,
-        total_bundles: totalBundles,
-        last_count_time: latest?.created_at || roomTotal?.updated_at || null,
+        total_bundles: roomTotals.total,
+        last_count_time: latest?.created_at || roomTotals.latestUpdate || null,
         last_count_staff: latest?.staff_name || null,
-        item_breakdown: itemBreakdown,
+        item_breakdown: [],
       }
     })
   } catch (error) {
@@ -172,17 +201,226 @@ export async function getStorageRooms() {
 }
 
 export async function getShelvesByRoom(locationId) {
+  const baseQuery = () =>
+    supabase
+      .from('shelves')
+      .select(
+        'id,name,qr_slug,shelf_items(sort_order,is_active,item_id,items(id,name,label)),balances(id,current_balance,item_id,items(id,name,label))',
+      )
+      .eq('location_id', locationId)
+      .order('name', { ascending: true })
+      .limit(100)
+
   try {
-    const { data, error } = await withTimeout(
-      supabase
-        .from('shelves')
-        .select('id,name,balances(id,current_balance,item_id,items(id,name,label))')
-        .eq('location_id', locationId)
-        .order('name', { ascending: true })
-        .limit(100),
-    )
+    let { data, error } = await withTimeout(baseQuery().eq('is_active', true))
+    if (error && /is_active|column/.test(error.message || '')) {
+      ;({ data, error } = await withTimeout(baseQuery()))
+    }
+    if (error && /shelf_items|relationship/.test(error.message || '')) {
+      ;({ data, error } = await withTimeout(
+        supabase
+          .from('shelves')
+          .select('id,name,qr_slug,balances(id,current_balance,item_id,items(id,name,label))')
+          .eq('location_id', locationId)
+          .order('name', { ascending: true })
+          .limit(100),
+      ))
+      data = (data || []).map((shelf) => ({ ...shelf, shelf_items: [] }))
+    }
     if (error) throw error
     return data || []
+  } catch (error) {
+    throw error
+  }
+}
+
+const buildQrSlug = (locationName, rackName) => {
+  const base = `${locationName || 'room'}-${rackName || 'rack'}`
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return base.slice(0, 80) || `rack-${crypto.randomUUID().slice(0, 8)}`
+}
+
+export async function getStorageRoomsWithRackCounts() {
+  try {
+    const [{ data: locations, error: locationsError }, { data: shelves, error: shelvesError }] =
+      await Promise.all([
+        withTimeout(
+          supabase
+            .from('locations')
+            .select('id,name,building')
+            .eq('is_active', true)
+            .eq('mode', 'full')
+            .order('name', { ascending: true })
+            .limit(100),
+        ),
+        withTimeout(
+          supabase.from('shelves').select('id,location_id').eq('is_active', true).limit(500),
+        ),
+      ])
+    if (locationsError) throw locationsError
+    if (shelvesError) throw shelvesError
+
+    const rackCountByLocation = (shelves || []).reduce((acc, shelf) => {
+      acc[shelf.location_id] = (acc[shelf.location_id] || 0) + 1
+      return acc
+    }, {})
+
+    return (locations || []).map((location) => ({
+      ...location,
+      rack_count: rackCountByLocation[location.id] || 0,
+    }))
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function getAdminRoomRacks(locationId) {
+  const baseQuery = () =>
+    supabase
+      .from('shelves')
+      .select(
+        'id,name,qr_slug,created_at,shelf_items(sort_order,is_active,item_id,items(id,name,label)),balances(current_balance,item_id)',
+      )
+      .eq('location_id', locationId)
+      .order('name', { ascending: true })
+      .limit(100)
+
+  try {
+    let { data, error } = await withTimeout(baseQuery().eq('is_active', true))
+    if (error && /is_active|column/.test(error.message || '')) {
+      ;({ data, error } = await withTimeout(baseQuery()))
+    }
+    if (error && /shelf_items|relationship/.test(error.message || '')) {
+      ;({ data, error } = await withTimeout(
+        supabase
+          .from('shelves')
+          .select('id,name,qr_slug,created_at,balances(current_balance,item_id)')
+          .eq('location_id', locationId)
+          .order('name', { ascending: true })
+          .limit(100),
+      ))
+      data = (data || []).map((shelf) => ({ ...shelf, shelf_items: [] }))
+    }
+    if (error) throw error
+    return data || []
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function createRack({ locationId, locationName, name, itemIds = [] }) {
+  try {
+    const trimmedName = String(name || '').trim()
+    if (!locationId || !trimmedName) {
+      throw new Error('Room and rack name are required.')
+    }
+
+    let qrSlug = buildQrSlug(locationName, trimmedName)
+    const { data: shelf, error: shelfError } = await withTimeout(
+      supabase
+        .from('shelves')
+        .insert({
+          location_id: locationId,
+          name: trimmedName,
+          qr_slug: qrSlug,
+        })
+        .select('id,name,qr_slug,location_id,created_at')
+        .single(),
+    )
+
+    if (shelfError) {
+      if (shelfError.code === '23505') {
+        qrSlug = `${qrSlug}-${crypto.randomUUID().slice(0, 6)}`
+        const { data: retryShelf, error: retryError } = await withTimeout(
+          supabase
+            .from('shelves')
+            .insert({
+              location_id: locationId,
+              name: trimmedName,
+              qr_slug: qrSlug,
+            })
+            .select('id,name,qr_slug,location_id,created_at')
+            .single(),
+        )
+        if (retryError) throw retryError
+        return finalizeRackItems(retryShelf, itemIds)
+      }
+      throw shelfError
+    }
+
+    return finalizeRackItems(shelf, itemIds)
+  } catch (error) {
+    throw error
+  }
+}
+
+async function finalizeRackItems(shelf, itemIds) {
+  await setRackItems({ shelfId: shelf.id, itemIds })
+  return shelf
+}
+
+export async function setRackItems({ shelfId, itemIds = [] }) {
+  const uniqueItemIds = [...new Set((itemIds || []).filter(Boolean))]
+
+  const { data: existing, error: fetchError } = await withTimeout(
+    supabase.from('shelf_items').select('id,item_id,is_active').eq('shelf_id', shelfId),
+  )
+  if (fetchError) throw fetchError
+
+  const existingByItem = new Map((existing || []).map((row) => [row.item_id, row]))
+  const targetSet = new Set(uniqueItemIds)
+
+  for (const row of existing || []) {
+    if (!targetSet.has(row.item_id) && row.is_active !== false) {
+      const { error } = await withTimeout(
+        supabase.from('shelf_items').update({ is_active: false }).eq('id', row.id),
+      )
+      if (error) throw error
+    }
+  }
+
+  for (let index = 0; index < uniqueItemIds.length; index += 1) {
+    const itemId = uniqueItemIds[index]
+    const row = existingByItem.get(itemId)
+    if (row) {
+      const { error } = await withTimeout(
+        supabase
+          .from('shelf_items')
+          .update({ is_active: true, sort_order: index + 1 })
+          .eq('id', row.id),
+      )
+      if (error) throw error
+    } else {
+      const { error } = await withTimeout(
+        supabase.from('shelf_items').insert({
+          shelf_id: shelfId,
+          item_id: itemId,
+          sort_order: index + 1,
+        }),
+      )
+      if (error) throw error
+    }
+  }
+}
+
+export async function updateRack({ shelfId, name, itemIds }) {
+  try {
+    if (!shelfId) throw new Error('Rack is required.')
+
+    const trimmedName = String(name || '').trim()
+    if (trimmedName) {
+      const { error } = await withTimeout(
+        supabase.from('shelves').update({ name: trimmedName }).eq('id', shelfId),
+      )
+      if (error) throw error
+    }
+
+    if (itemIds !== undefined) {
+      await setRackItems({ shelfId, itemIds })
+    }
   } catch (error) {
     throw error
   }
@@ -315,6 +553,70 @@ export async function adjustShelfItemCount({
   } catch (error) {
     throw error
   }
+}
+
+export async function transferShelfItemCount({
+  fromShelfId,
+  fromLocationId,
+  toShelfId,
+  toLocationId,
+  itemId,
+  quantity,
+  staffId,
+  staffName,
+  itemName,
+  itemLabel,
+}) {
+  const amount = Number(quantity || 0)
+  if (!amount || amount <= 0) {
+    throw new Error('Transfer amount must be greater than zero.')
+  }
+  if (fromShelfId === toShelfId) {
+    throw new Error('Source and destination racks must be different.')
+  }
+
+  const pullResult = await adjustShelfItemCount({
+    shelfId: fromShelfId,
+    locationId: fromLocationId,
+    itemId,
+    delta: -amount,
+    staffId,
+    staffName,
+    itemName,
+    itemLabel,
+  })
+
+  if (!pullResult.applied_delta) {
+    throw new Error('Not enough stock on the source rack.')
+  }
+
+  const transferred = Math.abs(pullResult.applied_delta)
+
+  await adjustShelfItemCount({
+    shelfId: toShelfId,
+    locationId: toLocationId,
+    itemId,
+    delta: transferred,
+    staffId,
+    staffName,
+    itemName,
+    itemLabel,
+  })
+
+  await withTimeout(
+    supabase.from('log_entries').insert({
+      location_id: fromLocationId,
+      shelf_id: fromShelfId,
+      item_id: itemId,
+      action_type: 'transfer',
+      quantity: transferred,
+      staff_id: staffId || null,
+      staff_name: staffName || null,
+      notes: `transfer_to:${toLocationId}:${toShelfId}`,
+    }),
+  )
+
+  return { transferred }
 }
 
 export async function getTasksForToday() {

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabase'
-import { getProfile } from '../lib/queries'
+import { clearLocationsCache, getProfile } from '../lib/queries'
 
 const AuthContext = createContext(null)
 const normalizeRole = (role) => String(role || '').trim().toLowerCase()
@@ -98,6 +98,7 @@ export function AuthProvider({ children }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (signingOutRef.current && event !== 'SIGNED_OUT') return
+      clearLocationsCache()
       const sessionUser = session?.user ?? null
       setUser(sessionUser)
       if (sessionUser) {

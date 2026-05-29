@@ -1,6 +1,7 @@
 import {
   CalendarDays,
   CheckSquare,
+  Layers,
   LayoutDashboard,
   Package,
   Users,
@@ -17,6 +18,7 @@ const staffTabs = [
 const adminTabs = [
   { label: 'Overview', icon: LayoutDashboard, to: '/dashboard' },
   { label: 'Todos', icon: CheckSquare, to: '/admin-todos' },
+  { label: 'Racks', icon: Layers, to: '/admin-racks' },
   { label: 'Schedule', icon: CalendarDays, to: '/admin-schedule' },
   { label: 'Staff', icon: Users, to: '/admin-staff' },
   { label: 'Inventory', icon: Package, to: '/inventory' },
