@@ -38,7 +38,15 @@ export const SETTINGS = {
   },
 
   // Buildings (for linen pickup tracking)
-  buildings: ['CVA', 'OHG', 'Joe West', 'Mailroom', 'P1', 'SVP'],
+  buildings: ['CVA', 'OGH', 'Joe West', 'Mailroom', 'P1', 'SVP'],
+
+  // Weekly pickup mission item types
+  missionItems: [
+    { key: 'face_towels', label: 'Face Towels' },
+    { key: 'body_towels', label: 'Body Towels' },
+    { key: 'top_sheets', label: 'Top Sheets' },
+    { key: 'pillow_cases', label: 'Pillow Cases' },
+  ],
 
   // App
   app: {

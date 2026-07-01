@@ -6,6 +6,7 @@ import { SETTINGS } from '../config/settings'
 import { supabase } from '../supabase'
 import { useAuth } from '../context/AuthContext'
 import { getActiveLaundryLoads, updateLaundryLoadStatus } from '../lib/queries'
+import { SkeletonLaundryCard } from './Skeleton'
 
 export default function AdminLaundrySection() {
   const { user, profile } = useAuth()
@@ -69,11 +70,7 @@ export default function AdminLaundrySection() {
       {loading ? (
         <div>
           {[1, 2].map((row) => (
-            <div key={row} className="brutal-card mb-2.5 bg-white p-4">
-              <div className="skeleton mb-3 h-5 w-44" />
-              <div className="skeleton mb-2 h-3 w-full" />
-              <div className="skeleton h-3 w-40" />
-            </div>
+            <SkeletonLaundryCard key={row} />
           ))}
         </div>
       ) : !loads.length ? (

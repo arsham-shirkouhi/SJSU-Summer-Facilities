@@ -1,34 +1,44 @@
-import { Eye, EyeOff, Lock, Mail } from 'lucide-react'
+import { Hash } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { normalizePinCode } from '../lib/pinAuth'
 import { useAuth } from '../context/AuthContext'
 
 export default function Login() {
   const navigate = useNavigate()
-  const { user, profile, signIn, signOut } = useAuth()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
+  const { user, profile, signInWithPin, signOut } = useAuth()
+  const [pinCode, setPinCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
+
+    const normalized = normalizePinCode(pinCode)
+    if (!normalized) {
+      setError('Enter your 4-digit login code.')
+      return
+    }
+
     setLoading(true)
     try {
-      await signIn(email, password)
+      await signInWithPin(normalized)
       navigate('/dashboard', { replace: true })
     } catch (signInError) {
-      setError(signInError?.message || 'Unable to sign in. Please check your credentials.')
+      setError(signInError?.message || 'Invalid login code. Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
+  const handlePinChange = (value) => {
+    setPinCode(value.replace(/\D/g, '').slice(0, 4))
+  }
+
   const handleSignOutCurrent = async () => {
     await signOut()
-    setPassword('')
+    setPinCode('')
     setError('')
   }
 
@@ -45,19 +55,16 @@ export default function Login() {
 
       <div className="relative mx-auto flex min-h-screen w-full max-w-[620px] items-center px-5 py-8">
         <LoginCard
-          email={email}
-          password={password}
-          showPassword={showPassword}
+          pinCode={pinCode}
           loading={loading}
           error={error}
-          onEmailChange={setEmail}
-          onPasswordChange={setPassword}
-          onTogglePassword={() => setShowPassword((value) => !value)}
+          onPinChange={handlePinChange}
           onSubmit={handleSubmit}
-          signedInEmail={user?.email}
           signedInName={profile?.full_name}
+          signedInPin={profile?.pin_code}
           onContinueToDashboard={() => navigate('/dashboard', { replace: true })}
           onSignOutCurrent={handleSignOutCurrent}
+          hasSession={Boolean(user)}
         />
       </div>
     </div>
@@ -65,19 +72,16 @@ export default function Login() {
 }
 
 function LoginCard({
-  email,
-  password,
-  showPassword,
+  pinCode,
   loading,
   error,
-  onEmailChange,
-  onPasswordChange,
-  onTogglePassword,
+  onPinChange,
   onSubmit,
-  signedInEmail,
   signedInName,
+  signedInPin,
   onContinueToDashboard,
   onSignOutCurrent,
+  hasSession,
 }) {
   return (
     <form
@@ -94,11 +98,11 @@ function LoginCard({
         SJSU Summer Housing · LinenTrack
       </p>
 
-      {signedInEmail ? (
+      {hasSession ? (
         <div className="mb-6 border-2 border-ink bg-primary-light p-3">
           <p className="text-[10px] font-bold uppercase tracking-[0.08em]">Current Session</p>
-          <p className="mono text-[12px] font-bold">{signedInName || signedInEmail}</p>
-          <p className="mono text-[11px] text-[#3D3D3D]">{signedInEmail}</p>
+          <p className="mono text-[12px] font-bold">{signedInName || 'Staff User'}</p>
+          {signedInPin ? <p className="mono text-[11px] text-[#3D3D3D]">Code · {signedInPin}</p> : null}
           <div className="mt-2 flex gap-2">
             <button
               type="button"
@@ -120,47 +124,29 @@ function LoginCard({
 
       <div className="mb-6 h-0.5 w-full bg-ink" />
 
-      <div className="space-y-4">
-        <label className="block">
-          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em]">Email Address</div>
-          <div className="relative">
-            <Mail size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/80" />
-            <input
-              className="brutal-input !pl-12"
-              type="email"
-              value={email}
-              onChange={(event) => onEmailChange(event.target.value)}
-              required
-            />
-          </div>
-        </label>
-
-        <label className="block">
-          <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em]">Password</div>
-          <div className="relative">
-            <Lock size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/80" />
-            <input
-              className="brutal-input !pl-12 !pr-12"
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(event) => onPasswordChange(event.target.value)}
-              required
-            />
-            <button
-              type="button"
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-ink/80"
-              onClick={onTogglePassword}
-            >
-              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-        </label>
-      </div>
+      <label className="block">
+        <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em]">4-Digit Login Code</div>
+        <div className="relative">
+          <Hash size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/80" />
+          <input
+            className="brutal-input !pl-12 text-center !text-[28px] !font-bold tracking-[0.45em]"
+            type="text"
+            inputMode="numeric"
+            pattern="\d{4}"
+            maxLength={4}
+            value={pinCode}
+            onChange={(event) => onPinChange(event.target.value)}
+            placeholder="0000"
+            autoComplete="one-time-code"
+            required
+          />
+        </div>
+      </label>
 
       <button
         type="submit"
         className="brutal-btn mt-5 flex h-12 w-full items-center justify-center bg-primary text-[14px] text-white disabled:cursor-not-allowed disabled:opacity-70"
-        disabled={loading}
+        disabled={loading || pinCode.length !== 4}
       >
         {loading ? <span className="spinner-circle" /> : 'SIGN IN →'}
       </button>
@@ -172,7 +158,7 @@ function LoginCard({
       ) : null}
 
       <p className="mt-5 text-center text-[12px] text-[#6B6B6B]">
-        No account? Contact your administrator.
+        No code? Contact your administrator.
       </p>
 
       <svg viewBox="0 0 60 80" className="absolute -bottom-2.5 -right-2.5 h-20 w-[60px]" fill="none">

@@ -1,61 +1,90 @@
 import { format } from 'date-fns'
 import { supabase } from '../supabase'
 import { SETTINGS } from '../config/settings'
+import { parseEventNotes } from './eventNotes'
 
 const todayIso = () => format(new Date(), 'yyyy-MM-dd')
 const startOfTodayIso = () => `${todayIso()}T00:00:00`
 const endOfTodayIso = () => `${todayIso()}T23:59:59`
 
+const QUERY_TIMEOUT_MS = 12000
+const STORAGE_ROOMS_CACHE_MS = 15000
+const ACTIVE_SHELVES_CACHE_MS = 30000
+
 let cachedLocations = null
 let cachedItems = null
+let cachedStorageRooms = null
+let cachedStorageRoomsAt = 0
+let activeShelfCache = null
+let activeShelfCacheAt = 0
 
-export async function withTimeout(promise, ms = 8000) {
+export async function withTimeout(promise, ms = QUERY_TIMEOUT_MS) {
   const timeout = new Promise((_, reject) => {
     setTimeout(() => reject(new Error('Request timed out')), ms)
   })
   return Promise.race([promise, timeout])
 }
 
+function isRpcMissingError(error) {
+  const message = String(error?.message || '').toLowerCase()
+  return message.includes('function') || message.includes('rpc') || message.includes('schema cache')
+}
+
+export function clearStorageRoomsCache() {
+  cachedStorageRooms = null
+  cachedStorageRoomsAt = 0
+  activeShelfCache = null
+  activeShelfCacheAt = 0
+}
+
 export async function getProfile(userId) {
   let roleData = null
   let profileData = null
 
-  try {
+  const queryAccessRole = async (attempt = 0) => {
     const { data, error } = await withTimeout(
-      supabase
-        .from('user_access_roles')
-        .select('role')
-        .eq('user_id', userId)
-        .maybeSingle(),
+      supabase.from('user_access_roles').select('role').eq('user_id', userId).maybeSingle(),
+      6000,
     )
-    if (!error) roleData = data
-  } catch (_error) {
-    // Ignore role-table fetch errors; profile table may still resolve.
+    if (!error) return data
+    if (attempt >= 2) return null
+    await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+    return queryAccessRole(attempt + 1)
   }
 
   try {
-    const { data, error } = await withTimeout(
-      supabase
-        .from('profiles')
-        .select('id,full_name,role,location_access,is_active,created_at')
-        .eq('id', userId)
-        .maybeSingle(),
-    )
-    if (!error) profileData = data
+    const [resolvedRoleData, profileResult] = await Promise.all([
+      queryAccessRole(),
+      withTimeout(
+        supabase
+          .from('profiles')
+          .select('id,full_name,role,pin_code,contact_email,location_access,is_active,created_at')
+          .eq('id', userId)
+          .maybeSingle(),
+        6000,
+      ),
+    ])
+    roleData = resolvedRoleData
+    if (!profileResult.error) profileData = profileResult.data
   } catch (_error) {
-    // Ignore profile fetch errors; role-table can still drive admin/staff view.
+    // Ignore fetch errors; fallback profile is used below.
   }
 
   const effectiveRole = roleData?.role || profileData?.role || 'staff'
-  if (profileData) return { ...profileData, role: effectiveRole }
+  const baseProfile = profileData
+    ? { ...profileData, role: effectiveRole }
+    : {
+        id: userId,
+        full_name: 'Staff User',
+        role: effectiveRole,
+        location_access: null,
+        is_active: true,
+        created_at: null,
+      }
 
   return {
-    id: userId,
-    full_name: 'Staff User',
-    role: effectiveRole,
-    location_access: null,
-    is_active: true,
-    created_at: null,
+    ...baseProfile,
+    roleFromAccessTable: Boolean(roleData?.role),
   }
 }
 
@@ -69,19 +98,52 @@ export async function getAdminMembers() {
   }
 }
 
-export async function adminCreateUserAccount({ email, fullName, temporaryPassword, role }) {
+export async function adminCreateUserAccount({ fullName, pinCode, contactEmail, role }) {
   try {
     const { data, error } = await withTimeout(
       supabase.rpc('admin_create_user_account', {
-        p_email: email,
         p_full_name: fullName,
-        p_temporary_password: temporaryPassword,
+        p_pin_code: pinCode,
+        p_contact_email: contactEmail,
         p_role: role,
       }),
       12000,
     )
     if (error) throw error
     return Array.isArray(data) ? data[0] : data
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function adminUpdateUserAccount({ userId, fullName, pinCode, contactEmail, role }) {
+  try {
+    const { data, error } = await withTimeout(
+      supabase.rpc('admin_update_user_account', {
+        p_user_id: userId,
+        p_full_name: fullName,
+        p_pin_code: pinCode,
+        p_contact_email: contactEmail,
+        p_role: role,
+      }),
+      12000,
+    )
+    if (error) throw error
+    return Array.isArray(data) ? data[0] : data
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function adminDeleteUserAccount(pinCode) {
+  try {
+    const { error } = await withTimeout(
+      supabase.rpc('admin_delete_user_account', {
+        p_pin_code: pinCode,
+      }),
+      12000,
+    )
+    if (error) throw error
   } catch (error) {
     throw error
   }
@@ -128,6 +190,147 @@ export async function getLocationById(locationId) {
 
 export function clearLocationsCache() {
   cachedLocations = null
+  clearStorageRoomsCache()
+}
+
+async function getActiveShelfIds(force = false) {
+  if (
+    !force &&
+    activeShelfCache &&
+    Date.now() - activeShelfCacheAt < ACTIVE_SHELVES_CACHE_MS
+  ) {
+    return activeShelfCache
+  }
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('shelves').select('id,location_id,is_active').eq('is_active', true).limit(500),
+    )
+    if (error) throw error
+    activeShelfCache = (data || []).map((shelf) => ({
+      id: shelf.id,
+      location_id: shelf.location_id,
+    }))
+  } catch (error) {
+    if (/is_active|column/.test(error.message || '')) {
+      const { data, error: fallbackError } = await withTimeout(
+        supabase.from('shelves').select('id,location_id').limit(500),
+      )
+      if (fallbackError) throw fallbackError
+      activeShelfCache = data || []
+    } else {
+      throw error
+    }
+  }
+
+  activeShelfCacheAt = Date.now()
+  return activeShelfCache
+}
+
+async function getActiveShelfBalances(columns = 'location_id,current_balance,updated_at,shelf_id') {
+  const shelves = await getActiveShelfIds()
+  const shelfIds = shelves.map((shelf) => shelf.id)
+  if (!shelfIds.length) return []
+
+  const { data, error } = await withTimeout(
+    supabase.from('balances').select(columns).in('shelf_id', shelfIds).limit(5000),
+  )
+  if (error) throw error
+  return data || []
+}
+
+async function getStorageRoomsFallback() {
+  const [{ data: locations, error: locationsError }, balances, { data: logs, error: logsError }] =
+    await Promise.all([
+      withTimeout(
+        supabase
+          .from('locations')
+          .select('id,name,building,low_threshold,critical_threshold')
+          .eq('is_active', true)
+          .eq('mode', 'full')
+          .order('created_at', { ascending: true })
+          .limit(100),
+      ),
+      getActiveShelfBalances('location_id,current_balance,updated_at,shelf_id'),
+      withTimeout(
+        supabase
+          .from('log_entries')
+          .select('location_id,created_at,staff_name')
+          .not('location_id', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(50),
+      ),
+    ])
+  if (locationsError) throw locationsError
+  if (logsError) throw logsError
+
+  const totalsByLocation = (balances || []).reduce((acc, row) => {
+    if (!row.location_id) return acc
+    if (!acc[row.location_id]) {
+      acc[row.location_id] = { total: 0, latestUpdate: null }
+    }
+    acc[row.location_id].total += Number(row.current_balance || 0)
+    const updated = row.updated_at ? new Date(row.updated_at) : null
+    if (updated && (!acc[row.location_id].latestUpdate || updated > acc[row.location_id].latestUpdate)) {
+      acc[row.location_id].latestUpdate = updated
+    }
+    return acc
+  }, {})
+
+  const latestLogByLocation = (logs || []).reduce((acc, log) => {
+    if (log.location_id && !acc[log.location_id]) acc[log.location_id] = log
+    return acc
+  }, {})
+
+  return (locations || []).map((location) => {
+    const roomTotals = totalsByLocation[location.id] || { total: 0, latestUpdate: null }
+    const latest = latestLogByLocation[location.id]
+
+    return {
+      id: location.id,
+      name: location.name,
+      building: location.building,
+      low_threshold: location.low_threshold,
+      critical_threshold: location.critical_threshold,
+      total_bundles: roomTotals.total,
+      last_count_time: latest?.created_at || roomTotals.latestUpdate || null,
+      last_count_staff: latest?.staff_name || null,
+      item_breakdown: [],
+    }
+  })
+}
+
+export async function getStorageRooms(options = {}) {
+  const forceFresh = Boolean(options.fresh)
+  if (
+    !forceFresh &&
+    cachedStorageRooms &&
+    Date.now() - cachedStorageRoomsAt < STORAGE_ROOMS_CACHE_MS
+  ) {
+    return cachedStorageRooms
+  }
+
+  try {
+    const { data, error } = await withTimeout(supabase.rpc('get_storage_room_summaries'))
+    if (!error && Array.isArray(data)) {
+      const rows = data.map((location) => ({
+        ...location,
+        total_bundles: Number(location.total_bundles || 0),
+        item_breakdown: [],
+      }))
+      cachedStorageRooms = rows
+      cachedStorageRoomsAt = Date.now()
+      return rows
+    }
+    if (error && !isRpcMissingError(error)) throw error
+  } catch (error) {
+    if (error.message === 'Request timed out') throw error
+  }
+
+  const rows = await getStorageRoomsFallback()
+  cachedStorageRooms = rows
+  cachedStorageRoomsAt = Date.now()
+  return rows
 }
 
 export async function getItems() {
@@ -144,91 +347,66 @@ export async function getItems() {
   }
 }
 
-export async function getStorageRooms() {
-  try {
-    const [{ data: locations, error: locationsError }, { data: balances, error: balancesError }] =
-      await Promise.all([
-        withTimeout(
-          supabase
-            .from('locations')
-            .select('id,name,building,low_threshold,critical_threshold,log_entries(created_at,staff_name)')
-            .eq('is_active', true)
-            .eq('mode', 'full')
-            .order('created_at', { ascending: true })
-            .order('created_at', { ascending: false, referencedTable: 'log_entries' })
-            .limit(1, { referencedTable: 'log_entries' })
-            .limit(100),
-        ),
-        withTimeout(
-          supabase.from('balances').select('location_id,current_balance,updated_at').limit(5000),
-        ),
-      ])
-    if (locationsError) throw locationsError
-    if (balancesError) throw balancesError
-
-    const totalsByLocation = (balances || []).reduce((acc, row) => {
-      if (!row.location_id) return acc
-      if (!acc[row.location_id]) {
-        acc[row.location_id] = { total: 0, latestUpdate: null }
-      }
-      acc[row.location_id].total += Number(row.current_balance || 0)
-      const updated = row.updated_at ? new Date(row.updated_at) : null
-      if (updated && (!acc[row.location_id].latestUpdate || updated > acc[row.location_id].latestUpdate)) {
-        acc[row.location_id].latestUpdate = updated
-      }
-      return acc
-    }, {})
-
-    return (locations || []).map((location) => {
-      const roomTotals = totalsByLocation[location.id] || { total: 0, latestUpdate: null }
-      const latest = Array.isArray(location.log_entries) ? location.log_entries[0] : null
-
-      return {
-        id: location.id,
-        name: location.name,
-        building: location.building,
-        low_threshold: location.low_threshold,
-        critical_threshold: location.critical_threshold,
-        total_bundles: roomTotals.total,
-        last_count_time: latest?.created_at || roomTotals.latestUpdate || null,
-        last_count_staff: latest?.staff_name || null,
-        item_breakdown: [],
-      }
-    })
-  } catch (error) {
-    throw error
-  }
-}
-
 export async function getShelvesByRoom(locationId) {
-  const baseQuery = () =>
-    supabase
+  try {
+    let shelvesQuery = supabase
       .from('shelves')
-      .select(
-        'id,name,qr_slug,shelf_items(sort_order,is_active,item_id,items(id,name,label)),balances(id,current_balance,item_id,items(id,name,label))',
-      )
+      .select('id,name,qr_slug')
       .eq('location_id', locationId)
       .order('name', { ascending: true })
       .limit(100)
 
-  try {
-    let { data, error } = await withTimeout(baseQuery().eq('is_active', true))
-    if (error && /is_active|column/.test(error.message || '')) {
-      ;({ data, error } = await withTimeout(baseQuery()))
+    let { data: shelves, error: shelvesError } = await withTimeout(shelvesQuery.eq('is_active', true))
+    if (shelvesError && /is_active|column/.test(shelvesError.message || '')) {
+      ;({ data: shelves, error: shelvesError } = await withTimeout(shelvesQuery))
     }
-    if (error && /shelf_items|relationship/.test(error.message || '')) {
-      ;({ data, error } = await withTimeout(
+    if (shelvesError) throw shelvesError
+
+    const shelfIds = (shelves || []).map((shelf) => shelf.id)
+    if (!shelfIds.length) return []
+
+    const shelfItemsPromise = withTimeout(
+      supabase
+        .from('shelf_items')
+        .select('shelf_id,sort_order,is_active,item_id,items(id,name,label)')
+        .in('shelf_id', shelfIds),
+    ).catch((error) => {
+      if (/shelf_items|relationship/.test(error.message || '')) {
+        return { data: [], error: null }
+      }
+      throw error
+    })
+
+    const [shelfItemsResult, balancesResult] = await Promise.all([
+      shelfItemsPromise,
+      withTimeout(
         supabase
-          .from('shelves')
-          .select('id,name,qr_slug,balances(id,current_balance,item_id,items(id,name,label))')
-          .eq('location_id', locationId)
-          .order('name', { ascending: true })
-          .limit(100),
-      ))
-      data = (data || []).map((shelf) => ({ ...shelf, shelf_items: [] }))
-    }
-    if (error) throw error
-    return data || []
+          .from('balances')
+          .select('id,shelf_id,current_balance,item_id,items(id,name,label)')
+          .eq('location_id', locationId),
+      ),
+    ])
+
+    if (balancesResult.error) throw balancesResult.error
+    if (shelfItemsResult.error) throw shelfItemsResult.error
+
+    const shelfItemsByShelf = (shelfItemsResult.data || []).reduce((acc, row) => {
+      if (!acc[row.shelf_id]) acc[row.shelf_id] = []
+      acc[row.shelf_id].push(row)
+      return acc
+    }, {})
+
+    const balancesByShelf = (balancesResult.data || []).reduce((acc, row) => {
+      if (!acc[row.shelf_id]) acc[row.shelf_id] = []
+      acc[row.shelf_id].push(row)
+      return acc
+    }, {})
+
+    return (shelves || []).map((shelf) => ({
+      ...shelf,
+      shelf_items: shelfItemsByShelf[shelf.id] || [],
+      balances: balancesByShelf[shelf.id] || [],
+    }))
   } catch (error) {
     throw error
   }
@@ -241,6 +419,44 @@ const buildQrSlug = (locationName, rackName) => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return base.slice(0, 80) || `rack-${crypto.randomUUID().slice(0, 8)}`
+}
+
+async function syncLocationLinenTotalsFromBalances(locationId) {
+  if (!locationId) return
+
+  const rows = await getActiveShelfBalances('current_balance,location_id,items(name,label)')
+  const balances = rows.filter((row) => row.location_id === locationId)
+
+  const totals = {
+    linen: 0,
+    face_hand_towel: 0,
+    body_towel: 0,
+    pillow_case: 0,
+  }
+
+  for (const row of balances) {
+    const column = resolveLocationTotalColumn(row.items?.name, row.items?.label)
+    if (column) totals[column] += Number(row.current_balance || 0)
+  }
+
+  const { data: totalRow, error: fetchError } = await withTimeout(
+    supabase.from('location_linen_totals').select('id').eq('location_id', locationId).maybeSingle(),
+  )
+  if (fetchError) throw fetchError
+
+  const payload = { ...totals, updated_at: new Date().toISOString() }
+
+  if (totalRow?.id) {
+    const { error } = await withTimeout(
+      supabase.from('location_linen_totals').update(payload).eq('id', totalRow.id),
+    )
+    if (error) throw error
+  } else {
+    const { error } = await withTimeout(
+      supabase.from('location_linen_totals').insert({ location_id: locationId, ...totals }),
+    )
+    if (error) throw error
+  }
 }
 
 export async function getStorageRoomsWithRackCounts() {
@@ -426,6 +642,44 @@ export async function updateRack({ shelfId, name, itemIds }) {
   }
 }
 
+export async function deleteRack({ shelfId }) {
+  try {
+    if (!shelfId) throw new Error('Rack is required.')
+
+    const { data: shelf, error: shelfFetchError } = await withTimeout(
+      supabase.from('shelves').select('id,location_id').eq('id', shelfId).maybeSingle(),
+    )
+    if (shelfFetchError) throw shelfFetchError
+    if (!shelf) throw new Error('Rack not found.')
+
+    const { error: balanceDeleteError } = await withTimeout(
+      supabase.from('balances').delete().eq('shelf_id', shelfId),
+    )
+    if (balanceDeleteError) throw balanceDeleteError
+
+    try {
+      await withTimeout(
+        supabase.from('shelf_items').update({ is_active: false }).eq('shelf_id', shelfId),
+      )
+    } catch (_shelfItemsError) {
+      // shelf_items may not exist on older databases
+    }
+
+    const { error: shelfUpdateError } = await withTimeout(
+      supabase.from('shelves').update({ is_active: false }).eq('id', shelfId),
+    )
+    if (shelfUpdateError) throw shelfUpdateError
+
+    if (shelf.location_id) {
+      void syncLocationLinenTotalsFromBalances(shelf.location_id).catch(() => {})
+    }
+    clearStorageRoomsCache()
+    await getActiveShelfIds(true)
+  } catch (error) {
+    throw error
+  }
+}
+
 const resolveLocationTotalColumn = (itemName, itemLabel) => {
   const value = `${itemName || ''} ${itemLabel || ''}`.toLowerCase()
   if (value.includes('pillow')) return 'pillow_case'
@@ -500,7 +754,7 @@ export async function adjustShelfItemCount({
     }
 
     const actionType = appliedDelta > 0 ? 'restock' : 'pull'
-    await withTimeout(
+    void withTimeout(
       supabase.from('log_entries').insert({
         location_id: locationId,
         shelf_id: shelfId,
@@ -511,43 +765,43 @@ export async function adjustShelfItemCount({
         staff_name: staffName || null,
         notes: 'rack_count_adjustment',
       }),
-    )
+    ).catch(() => {})
 
     const totalColumn = resolveLocationTotalColumn(itemName, itemLabel)
     if (totalColumn && locationId) {
-      const { data: totalRow, error: totalsFetchError } = await withTimeout(
+      void withTimeout(
         supabase
           .from('location_linen_totals')
           .select('id,linen,face_hand_towel,body_towel,pillow_case')
           .eq('location_id', locationId)
           .maybeSingle(),
       )
-      if (totalsFetchError) throw totalsFetchError
-
-      if (totalRow?.id) {
-        const updatedTotal = Math.max(0, Number(totalRow[totalColumn] || 0) + appliedDelta)
-        const { error: totalsUpdateError } = await withTimeout(
-          supabase
-            .from('location_linen_totals')
-            .update({ [totalColumn]: updatedTotal, updated_at: new Date().toISOString() })
-            .eq('id', totalRow.id),
-        )
-        if (totalsUpdateError) throw totalsUpdateError
-      } else {
-        const baseTotals = {
-          location_id: locationId,
-          linen: 0,
-          face_hand_towel: 0,
-          body_towel: 0,
-          pillow_case: 0,
-        }
-        baseTotals[totalColumn] = Math.max(0, appliedDelta)
-        const { error: totalsInsertError } = await withTimeout(
-          supabase.from('location_linen_totals').insert(baseTotals),
-        )
-        if (totalsInsertError) throw totalsInsertError
-      }
+        .then(async ({ data: totalRow, error: totalsFetchError }) => {
+          if (totalsFetchError) return
+          if (totalRow?.id) {
+            const updatedTotal = Math.max(0, Number(totalRow[totalColumn] || 0) + appliedDelta)
+            await withTimeout(
+              supabase
+                .from('location_linen_totals')
+                .update({ [totalColumn]: updatedTotal, updated_at: new Date().toISOString() })
+                .eq('id', totalRow.id),
+            )
+            return
+          }
+          const baseTotals = {
+            location_id: locationId,
+            linen: 0,
+            face_hand_towel: 0,
+            body_towel: 0,
+            pillow_case: 0,
+          }
+          baseTotals[totalColumn] = Math.max(0, appliedDelta)
+          await withTimeout(supabase.from('location_linen_totals').insert(baseTotals))
+        })
+        .catch(() => {})
     }
+
+    clearStorageRoomsCache()
 
     return { current_balance: Number(updatedBalanceRow?.current_balance || nextBalance), applied_delta: appliedDelta }
   } catch (error) {
@@ -643,7 +897,7 @@ export async function getAllTasksForToday() {
     const { data, error } = await withTimeout(
       supabase
         .from('tasks')
-        .select('id,title,details,subtasks,status,priority,is_priority,creator_name,created_at')
+        .select('id,title,details,subtasks,assigned_date,status,priority,is_priority,creator_name,created_at')
         .eq('assigned_date', today)
         .order('is_priority', { ascending: false })
         .order('created_at', { ascending: true }),
@@ -846,7 +1100,7 @@ export async function updateLaundryLoadStatus(id, status) {
   }
 }
 
-export async function getNextPickupDate() {
+export async function getNextPickupEvents() {
   try {
     const { data, error } = await withTimeout(
       supabase
@@ -854,14 +1108,31 @@ export async function getNextPickupDate() {
         .select('id,pickup_date,notes,created_at')
         .gte('pickup_date', todayIso())
         .order('pickup_date', { ascending: true })
-        .limit(1)
-        .maybeSingle(),
+        .limit(100),
     )
     if (error) throw error
-    return data
+    if (!data?.length) return { date: null, events: [] }
+
+    const firstDate = data[0].pickup_date
+    const events = data
+      .filter((entry) => entry.pickup_date === firstDate)
+      .sort((a, b) => {
+        const aTime = parseEventNotes(a.notes).startTime || ''
+        const bTime = parseEventNotes(b.notes).startTime || ''
+        if (aTime !== bTime) return aTime.localeCompare(bTime)
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''))
+      })
+
+    return { date: firstDate, events }
   } catch (error) {
     throw error
   }
+}
+
+/** @deprecated Use getNextPickupEvents */
+export async function getNextPickupDate() {
+  const { date, events } = await getNextPickupEvents()
+  return events[0] ? { ...events[0], pickup_date: date } : null
 }
 
 export async function getPickupDates() {
@@ -965,14 +1236,18 @@ export async function getStaffActivityToday() {
     const { data: entries, error: entriesError } = entriesResult
     if (entriesError) throw entriesError
 
-    return (staff || []).map((member) => {
-      const memberEntries = (entries || []).filter((entry) => entry.staff_id === member.id)
-      return {
-        ...member,
-        entry_count: memberEntries.length,
-        last_active: memberEntries[0]?.created_at || null,
-      }
-    })
+    const activityByStaff = (entries || []).reduce((acc, entry) => {
+      if (!entry.staff_id) return acc
+      if (!acc[entry.staff_id]) acc[entry.staff_id] = { count: 0, last_active: entry.created_at }
+      acc[entry.staff_id].count += 1
+      return acc
+    }, {})
+
+    return (staff || []).map((member) => ({
+      ...member,
+      entry_count: activityByStaff[member.id]?.count || 0,
+      last_active: activityByStaff[member.id]?.last_active || null,
+    }))
   } catch (error) {
     throw error
   }
@@ -980,45 +1255,221 @@ export async function getStaffActivityToday() {
 
 export async function getUncountedShelves() {
   try {
-    const { data: shelves, error: shelvesError } = await withTimeout(
-      supabase
-        .from('shelves')
-        .select('id,name,location_id,locations(name),log_entries(created_at)')
-        .order('name')
-        .order('created_at', { ascending: false, referencedTable: 'log_entries' })
-        .limit(100),
-    )
-    if (shelvesError) throw shelvesError
-
     const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const [{ data: shelves, error: shelvesError }, { data: recentLogs, error: logsError }] =
+      await Promise.all([
+        withTimeout(
+          supabase
+            .from('shelves')
+            .select('id,name,location_id,locations(name)')
+            .eq('is_active', true)
+            .order('name')
+            .limit(100),
+        ),
+        withTimeout(
+          supabase
+            .from('log_entries')
+            .select('shelf_id,created_at')
+            .gte('created_at', dayAgoIso)
+            .not('shelf_id', 'is', null)
+            .limit(500),
+        ),
+      ])
+    if (shelvesError) throw shelvesError
+    if (logsError) throw logsError
+
+    const countedShelfIds = new Set((recentLogs || []).map((entry) => entry.shelf_id))
 
     return (shelves || [])
-      .filter(
-        (shelf) =>
-          !(shelf.log_entries || []).some((entry) => entry.created_at && entry.created_at >= dayAgoIso),
-      )
+      .filter((shelf) => !countedShelfIds.has(shelf.id))
       .map((shelf) => ({
         id: shelf.id,
         name: shelf.name,
         location_id: shelf.location_id,
         locations: shelf.locations,
-        last_count_time: shelf.log_entries?.[0]?.created_at || null,
+        last_count_time: null,
       }))
   } catch (error) {
+    if (/is_active|column/.test(error.message || '')) {
+      const { data: shelves, error: shelvesError } = await withTimeout(
+        supabase.from('shelves').select('id,name,location_id,locations(name)').order('name').limit(100),
+      )
+      if (shelvesError) throw shelvesError
+      return shelves || []
+    }
     throw error
   }
 }
 
 export async function getLinenCountByRoom() {
   try {
-    const { data, error } = await withTimeout(
+    const { data, error } = await withTimeout(supabase.rpc('get_linen_counts_by_room'))
+    if (!error && Array.isArray(data)) return data
+    if (error && !isRpcMissingError(error)) throw error
+  } catch (error) {
+    if (error.message === 'Request timed out') throw error
+  }
+
+  return getActiveShelfBalances(
+    'current_balance,updated_at,location_id,shelf_id,locations(id,name),items(id,label)',
+  )
+}
+
+export async function getActivePickupMission() {
+  try {
+    const { data: mission, error } = await withTimeout(
       supabase
-        .from('balances')
-        .select('current_balance,updated_at,locations(id,name),items(id,label)')
-        .limit(1000),
+        .from('pickup_missions')
+        .select('id,status,created_at,completed_at,created_by,completed_by')
+        .eq('status', 'active')
+        .maybeSingle(),
     )
     if (error) throw error
-    return data || []
+    if (!mission) return null
+
+    const { data: groups, error: groupsError } = await withTimeout(
+      supabase
+        .from('pickup_mission_groups')
+        .select('id,mission_id,name,face_towels,body_towels,top_sheets,pillow_cases,created_at,updated_at')
+        .eq('mission_id', mission.id)
+        .order('created_at', { ascending: true }),
+    )
+    if (groupsError) throw groupsError
+
+    return { ...mission, groups: groups || [] }
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function startPickupMission(userId) {
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('pickup_missions')
+        .insert({ status: 'active', created_by: userId || null })
+        .select('id,status,created_at,completed_at,created_by,completed_by')
+        .single(),
+    )
+    if (error) throw error
+    return { ...data, groups: [] }
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function savePickupMissionGroup({
+  missionId,
+  groupId,
+  name,
+  faceTowels,
+  bodyTowels,
+  topSheets,
+  pillowCases,
+  userId,
+}) {
+  try {
+    const payload = {
+      mission_id: missionId,
+      name: String(name || '').trim(),
+      face_towels: Math.max(0, Number(faceTowels) || 0),
+      body_towels: Math.max(0, Number(bodyTowels) || 0),
+      top_sheets: Math.max(0, Number(topSheets) || 0),
+      pillow_cases: Math.max(0, Number(pillowCases) || 0),
+      updated_at: new Date().toISOString(),
+    }
+
+    if (groupId) {
+      const { data, error } = await withTimeout(
+        supabase
+          .from('pickup_mission_groups')
+          .update(payload)
+          .eq('id', groupId)
+          .select('id,mission_id,name,face_towels,body_towels,top_sheets,pillow_cases,created_at,updated_at')
+          .single(),
+      )
+      if (error) throw error
+      return data
+    }
+
+    const { data, error } = await withTimeout(
+      supabase
+        .from('pickup_mission_groups')
+        .insert({ ...payload, created_by: userId || null })
+        .select('id,mission_id,name,face_towels,body_towels,top_sheets,pillow_cases,created_at,updated_at')
+        .single(),
+    )
+    if (error) throw error
+    return data
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function deletePickupMissionGroup(groupId) {
+  try {
+    const { error } = await withTimeout(supabase.from('pickup_mission_groups').delete().eq('id', groupId))
+    if (error) throw error
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function completePickupMission(missionId, userId) {
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('pickup_missions')
+        .update({
+          status: 'completed',
+          completed_by: userId || null,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', missionId)
+        .eq('status', 'active')
+        .select('id,status,created_at,completed_at,created_by,completed_by')
+        .single(),
+    )
+    if (error) throw error
+    return data
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function getPickupMissionHistory(limit = 30) {
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('pickup_missions')
+        .select(
+          'id,status,created_at,completed_at,created_by,completed_by,pickup_mission_groups(id,name,face_towels,body_towels,top_sheets,pillow_cases,created_at)',
+        )
+        .eq('status', 'completed')
+        .order('completed_at', { ascending: false })
+        .limit(limit),
+    )
+    if (error) throw error
+    return (data || []).map((mission) => ({
+      ...mission,
+      groups: mission.pickup_mission_groups || [],
+    }))
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function getPickupMissionGroup(groupId) {
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('pickup_mission_groups')
+        .select('id,mission_id,name,face_towels,body_towels,top_sheets,pillow_cases,created_at,updated_at')
+        .eq('id', groupId)
+        .maybeSingle(),
+    )
+    if (error) throw error
+    return data
   } catch (error) {
     throw error
   }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Pencil, Plus } from 'lucide-react'
+import { ArrowLeft, Pencil, Plus, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import TopBar from '../components/TopBar'
@@ -7,13 +7,15 @@ import BottomNav from '../components/BottomNav'
 import { useAuth } from '../context/AuthContext'
 import {
   createRack,
+  deleteRack,
   getAdminRoomRacks,
   getItems,
   getStorageRoomsWithRackCounts,
   updateRack,
 } from '../lib/queries'
+import { SkeletonBlock, SkeletonCard } from '../components/Skeleton'
 
-const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OHG', 'P1 Storage', 'SVP']
+const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OGH', 'P1 Storage', 'SVP']
 
 const orderedRooms = (rooms) =>
   [...rooms].sort((a, b) => {
@@ -41,7 +43,9 @@ export default function AdminRacks() {
   const [loadingRooms, setLoadingRooms] = useState(true)
   const [loadingRacks, setLoadingRacks] = useState(false)
   const [rackModal, setRackModal] = useState(null)
+  const [confirmDeleteRack, setConfirmDeleteRack] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const normalizedRole = String(profile?.role || '').trim().toLowerCase()
   if (normalizedRole !== 'admin') return <Navigate to="/dashboard" replace />
@@ -141,6 +145,22 @@ export default function AdminRacks() {
       toast.error(error.message || 'Failed to save rack')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleDeleteRack = async () => {
+    if (!confirmDeleteRack?.id) return
+
+    try {
+      setDeleting(true)
+      await deleteRack({ shelfId: confirmDeleteRack.id })
+      toast.success('Rack deleted')
+      setConfirmDeleteRack(null)
+      await Promise.all([loadRooms(), loadRacks()])
+    } catch (error) {
+      toast.error(error.message || 'Failed to delete rack')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -256,6 +276,14 @@ export default function AdminRacks() {
                         <Pencil size={12} />
                         Edit
                       </button>
+                      <button
+                        type="button"
+                        className="brutal-btn flex items-center gap-1 bg-danger-light px-2 py-1 text-[10px] text-ink"
+                        onClick={() => setConfirmDeleteRack(rack)}
+                      >
+                        <Trash2 size={12} />
+                        Delete
+                      </button>
                       <span className="stamp stamp-gray">{rack.qr_slug || 'NO QR'}</span>
                     </div>
                   </div>
@@ -296,6 +324,36 @@ export default function AdminRacks() {
           onClose={closeModal}
           onSubmit={handleSaveRack}
         />
+      ) : null}
+
+      {confirmDeleteRack ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
+          <div className="brutal-card w-full max-w-[480px] bg-white p-5">
+            <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Delete Rack</p>
+            <h3 className="mt-1 text-[18px] font-extrabold uppercase">{confirmDeleteRack.name}</h3>
+            <p className="mt-2 text-[12px] text-[#6B6B6B]">
+              This removes the rack from inventory and rack setup. Count history stays in the database.
+            </p>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                className="brutal-btn bg-white py-2 text-[11px]"
+                onClick={() => setConfirmDeleteRack(null)}
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="brutal-btn bg-danger py-2 text-[11px] text-white disabled:opacity-60"
+                onClick={handleDeleteRack}
+                disabled={deleting}
+              >
+                {deleting ? 'Deleting...' : 'Delete Rack'}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <BottomNav role="admin" />
@@ -396,10 +454,10 @@ function RoomSkeleton() {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {[1, 2, 3, 4, 5].map((row) => (
-        <div key={row} className="brutal-card bg-white p-4">
-          <div className="skeleton mb-2 h-5 w-40" />
-          <div className="skeleton h-8 w-16" />
-        </div>
+        <SkeletonCard key={row} className="p-4">
+          <SkeletonBlock className="mb-2 h-5 w-40" />
+          <SkeletonBlock className="h-8 w-16" />
+        </SkeletonCard>
       ))}
     </div>
   )
@@ -409,10 +467,10 @@ function RackSkeleton() {
   return (
     <div className="space-y-3">
       {[1, 2].map((row) => (
-        <div key={row} className="brutal-card bg-white p-4">
-          <div className="skeleton mb-2 h-5 w-48" />
-          <div className="skeleton h-6 w-full" />
-        </div>
+        <SkeletonCard key={row} className="p-4">
+          <SkeletonBlock className="mb-2 h-5 w-48" />
+          <SkeletonBlock className="h-10 w-full" />
+        </SkeletonCard>
       ))}
     </div>
   )

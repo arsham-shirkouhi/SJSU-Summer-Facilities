@@ -14,6 +14,10 @@ import {
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import TopBar from '../components/TopBar'
+import {
+  SkeletonBlock,
+  SkeletonCard,
+} from '../components/Skeleton'
 import BottomNav from '../components/BottomNav'
 import { useAuth } from '../context/AuthContext'
 import { SETTINGS } from '../config/settings'
@@ -27,7 +31,7 @@ import {
   transferShelfItemCount,
 } from '../lib/queries'
 
-const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OHG', 'P1 Storage', 'SVP']
+const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OGH', 'P1 Storage', 'SVP']
 
 const orderedRooms = (rooms) =>
   [...rooms].sort((a, b) => {
@@ -925,17 +929,17 @@ function InventorySkeleton() {
   return (
     <div className="space-y-4">
       {[1, 2, 3].map((row) => (
-        <div key={row} className="brutal-card bg-white p-4 sm:p-5">
-          <div className="skeleton mb-4 h-8 w-56" />
+        <SkeletonCard key={row} className="p-4 sm:p-5">
+          <SkeletonBlock className="mb-4 h-8 w-56" />
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
             {[1, 2, 3, 4].map((slot) => (
               <div key={slot} className="border-2 border-ink p-2.5">
-                <div className="skeleton mb-2 h-5 w-40" />
-                <div className="skeleton h-2 w-full" />
+                <SkeletonBlock className="mb-2 h-5 w-40" />
+                <SkeletonBlock className="h-10 w-full" />
               </div>
             ))}
           </div>
-        </div>
+        </SkeletonCard>
       ))}
     </div>
   )

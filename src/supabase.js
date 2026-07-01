@@ -4,4 +4,10 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey =
   import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error(
+    'Missing Supabase env vars. Copy linentrack/.env.example to .env and set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.',
+  )
+}
+
+export const supabase = createClient(supabaseUrl || '', supabaseAnonKey || '')

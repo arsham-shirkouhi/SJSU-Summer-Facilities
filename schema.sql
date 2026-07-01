@@ -6,6 +6,8 @@ drop trigger if exists on_auth_user_created on auth.users;
 drop function if exists public.handle_new_user();
 drop function if exists public.admin_list_members();
 drop function if exists public.admin_create_user_account(text, text, text, text);
+drop function if exists public.admin_create_user_account(text, text, text);
+drop function if exists public.admin_delete_user_account(text);
 
 drop table if exists laundry_batch_items cascade;
 drop table if exists laundry_batches cascade;
@@ -30,6 +32,8 @@ create table profiles (
   id uuid references auth.users primary key,
   full_name text not null,
   role text not null default 'staff',
+  pin_code text unique check (pin_code is null or pin_code ~ '^\d{4}$'),
+  contact_email text unique,
   location_access uuid[],
   is_active boolean default true,
   created_at timestamptz default now()
@@ -209,7 +213,7 @@ create table shift_notes (
 -- pickup schedule
 create table pickup_schedule (
   id uuid primary key default gen_random_uuid(),
-  pickup_date date not null unique,
+  pickup_date date not null,
   notes text,
   created_by uuid references profiles,
   created_at timestamptz default now()
@@ -240,7 +244,9 @@ create index if not exists idx_laundry_loads_started_at on laundry_loads(started
 create index if not exists idx_laundry_cycle_reports_week_start on laundry_cycle_reports(week_start);
 create index if not exists idx_laundry_cycle_reports_completed_at on laundry_cycle_reports(completed_at desc);
 create index if not exists idx_shelves_location_id on shelves(location_id);
+create index if not exists idx_shelves_location_active on shelves(location_id) where is_active = true;
 create index if not exists idx_shelves_qr_slug on shelves(qr_slug);
+create index if not exists idx_log_entries_location_created_at on log_entries(location_id, created_at desc);
 create index if not exists idx_shelf_items_shelf_id on shelf_items(shelf_id);
 create index if not exists idx_shelf_items_item_id on shelf_items(item_id);
 create index if not exists idx_location_linen_totals_location_id on location_linen_totals(location_id);
@@ -273,6 +279,7 @@ drop policy if exists "Authenticated users can read items" on items;
 drop policy if exists "Authenticated users can read balances" on balances;
 drop policy if exists "Authenticated users can update balances" on balances;
 drop policy if exists "Authenticated users can insert balances" on balances;
+drop policy if exists "Authenticated users can delete balances" on balances;
 drop policy if exists "Authenticated users can read shelves" on shelves;
 drop policy if exists "Authenticated users can insert shelves" on shelves;
 drop policy if exists "Authenticated users can update shelves" on shelves;
@@ -326,8 +333,9 @@ grant execute on function public.is_admin(uuid) to authenticated;
 create or replace function public.admin_list_members()
 returns table (
   user_id uuid,
-  email text,
+  pin_code text,
   full_name text,
+  contact_email text,
   role text,
   is_active boolean,
   created_at timestamptz
@@ -338,8 +346,9 @@ set search_path = public, auth
 as $$
   select
     u.id as user_id,
-    u.email::text as email,
+    p.pin_code,
     p.full_name,
+    p.contact_email,
     coalesce(uar.role, p.role, 'staff') as role,
     coalesce(p.is_active, true) as is_active,
     coalesce(p.created_at, u.created_at) as created_at
@@ -354,15 +363,16 @@ revoke all on function public.admin_list_members() from public;
 grant execute on function public.admin_list_members() to authenticated;
 
 create or replace function public.admin_create_user_account(
-  p_email text,
   p_full_name text,
-  p_temporary_password text,
+  p_pin_code text,
+  p_contact_email text,
   p_role text default 'staff'
 )
 returns table (
   user_id uuid,
-  email text,
+  pin_code text,
   full_name text,
+  contact_email text,
   role text,
   is_active boolean,
   created_at timestamptz
@@ -373,7 +383,10 @@ set search_path = public, auth
 as $$
 declare
   v_user_id uuid := gen_random_uuid();
-  v_email text := lower(trim(p_email));
+  v_pin text := lpad(regexp_replace(trim(coalesce(p_pin_code, '')), '\D', '', 'g'), 4, '0');
+  v_contact_email text := lower(trim(coalesce(p_contact_email, '')));
+  v_email text;
+  v_password text;
   v_role text := lower(trim(coalesce(p_role, 'staff')));
   v_name text := coalesce(nullif(trim(p_full_name), ''), 'Staff User');
 begin
@@ -381,20 +394,35 @@ begin
     raise exception 'Only admins can create users';
   end if;
 
-  if v_email is null or v_email = '' then
-    raise exception 'Email is required';
+  if v_pin !~ '^\d{4}$' then
+    raise exception 'Login code must be exactly 4 digits';
   end if;
 
-  if p_temporary_password is null or length(p_temporary_password) < 8 then
-    raise exception 'Temporary password must be at least 8 characters';
+  if v_contact_email is null or v_contact_email = '' then
+    raise exception 'Contact email is required';
+  end if;
+
+  if v_contact_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception 'Contact email is invalid';
   end if;
 
   if v_role not in ('admin', 'staff') then
     raise exception 'Role must be admin or staff';
   end if;
 
+  if exists (select 1 from public.profiles p where p.pin_code = v_pin) then
+    raise exception 'That login code is already in use';
+  end if;
+
+  if exists (select 1 from public.profiles p where lower(p.contact_email) = v_contact_email) then
+    raise exception 'That contact email is already in use';
+  end if;
+
+  v_email := 'staff-' || v_pin || '@linentrack.internal';
+  v_password := 'Linen' || v_pin || '!';
+
   if exists (select 1 from auth.users u where lower(u.email) = v_email) then
-    raise exception 'A user with this email already exists';
+    raise exception 'A user with this login code already exists';
   end if;
 
   insert into auth.users (
@@ -420,10 +448,10 @@ begin
     'authenticated',
     'authenticated',
     v_email,
-    extensions.crypt(p_temporary_password, extensions.gen_salt('bf')),
+    extensions.crypt(v_password, extensions.gen_salt('bf')),
     now(),
     jsonb_build_object('provider', 'email', 'providers', array['email']),
-    jsonb_build_object('full_name', v_name, 'role', v_role),
+    jsonb_build_object('full_name', v_name, 'role', v_role, 'pin_code', v_pin, 'contact_email', v_contact_email),
     now(),
     now(),
     '',
@@ -457,16 +485,20 @@ begin
   values (v_user_id, v_role)
   on conflict on constraint user_access_roles_pkey do update set role = excluded.role;
 
-  insert into public.profiles (id, full_name, role)
-  values (v_user_id, v_name, v_role)
+  insert into public.profiles (id, full_name, role, pin_code, contact_email)
+  values (v_user_id, v_name, v_role, v_pin, v_contact_email)
   on conflict (id) do update
-  set full_name = excluded.full_name, role = excluded.role;
+  set full_name = excluded.full_name,
+      role = excluded.role,
+      pin_code = excluded.pin_code,
+      contact_email = excluded.contact_email;
 
   return query
   select
     v_user_id as user_id,
-    v_email as email,
+    v_pin as pin_code,
     v_name as full_name,
+    v_contact_email as contact_email,
     v_role as role,
     true as is_active,
     now() as created_at;
@@ -475,6 +507,327 @@ $$;
 
 revoke all on function public.admin_create_user_account(text, text, text, text) from public;
 grant execute on function public.admin_create_user_account(text, text, text, text) to authenticated;
+
+create or replace function public.admin_delete_user_account(p_pin_code text)
+returns void
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  v_pin text := lpad(regexp_replace(trim(coalesce(p_pin_code, '')), '\D', '', 'g'), 4, '0');
+  v_user_id uuid;
+  v_admin_count integer;
+begin
+  if not public.is_admin(auth.uid()) then
+    raise exception 'Only admins can delete users';
+  end if;
+
+  if v_pin !~ '^\d{4}$' then
+    raise exception 'Login code is required';
+  end if;
+
+  select p.id
+  into v_user_id
+  from public.profiles p
+  where p.pin_code = v_pin;
+
+  if v_user_id is null then
+    raise exception 'User not found';
+  end if;
+
+  if v_user_id = auth.uid() then
+    raise exception 'You cannot delete your own account';
+  end if;
+
+  select count(*)
+  into v_admin_count
+  from public.user_access_roles uar
+  where uar.role = 'admin';
+
+  if v_admin_count <= 1 and exists (
+    select 1
+    from public.user_access_roles uar
+    where uar.user_id = v_user_id and uar.role = 'admin'
+  ) then
+    raise exception 'Cannot delete the last admin account';
+  end if;
+
+  update public.log_entries set staff_id = null where staff_id = v_user_id;
+  update public.tasks set created_by = null where created_by = v_user_id;
+  update public.laundry_batches set created_by = null where created_by = v_user_id;
+  update public.laundry_loads set created_by = null where created_by = v_user_id;
+  update public.shift_notes set created_by = null where created_by = v_user_id;
+  update public.pickup_schedule set created_by = null where created_by = v_user_id;
+  update public.announcements set created_by = null where created_by = v_user_id;
+
+  delete from public.user_access_roles where user_id = v_user_id;
+  delete from public.profiles where id = v_user_id;
+  delete from auth.identities where user_id = v_user_id;
+  delete from auth.users where id = v_user_id;
+end;
+$$;
+
+revoke all on function public.admin_delete_user_account(text) from public;
+grant execute on function public.admin_delete_user_account(text) to authenticated;
+
+drop function if exists public.admin_update_user_account(uuid, text, text, text, text);
+
+create or replace function public.admin_update_user_account(
+  p_user_id uuid,
+  p_full_name text,
+  p_pin_code text,
+  p_contact_email text,
+  p_role text default 'staff'
+)
+returns table (
+  user_id uuid,
+  pin_code text,
+  full_name text,
+  contact_email text,
+  role text,
+  is_active boolean,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  v_pin text := lpad(regexp_replace(trim(coalesce(p_pin_code, '')), '\D', '', 'g'), 4, '0');
+  v_contact_email text := lower(trim(coalesce(p_contact_email, '')));
+  v_auth_email text;
+  v_password text;
+  v_role text := lower(trim(coalesce(p_role, 'staff')));
+  v_name text := coalesce(nullif(trim(p_full_name), ''), 'Staff User');
+  v_old_pin text;
+  v_admin_count integer;
+begin
+  if not public.is_admin(auth.uid()) then
+    raise exception 'Only admins can update users';
+  end if;
+
+  if p_user_id is null then
+    raise exception 'User id is required';
+  end if;
+
+  if not exists (select 1 from public.profiles p where p.id = p_user_id) then
+    raise exception 'User not found';
+  end if;
+
+  if v_pin !~ '^\d{4}$' then
+    raise exception 'Login code must be exactly 4 digits';
+  end if;
+
+  if v_contact_email is null or v_contact_email = '' then
+    raise exception 'Contact email is required';
+  end if;
+
+  if v_contact_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception 'Contact email is invalid';
+  end if;
+
+  if v_role not in ('admin', 'staff') then
+    raise exception 'Role must be admin or staff';
+  end if;
+
+  if exists (
+    select 1 from public.profiles p
+    where p.pin_code = v_pin and p.id <> p_user_id
+  ) then
+    raise exception 'That login code is already in use';
+  end if;
+
+  if exists (
+    select 1 from public.profiles p
+    where lower(p.contact_email) = v_contact_email and p.id <> p_user_id
+  ) then
+    raise exception 'That contact email is already in use';
+  end if;
+
+  select p.pin_code into v_old_pin from public.profiles p where p.id = p_user_id;
+
+  if v_role <> 'admin' and exists (
+    select 1 from public.user_access_roles uar
+    where uar.user_id = p_user_id and uar.role = 'admin'
+  ) then
+    select count(*) into v_admin_count
+    from public.user_access_roles uar2
+    where uar2.role = 'admin';
+
+    if v_admin_count <= 1 then
+      raise exception 'Cannot remove the last admin account';
+    end if;
+  end if;
+
+  v_auth_email := 'staff-' || v_pin || '@linentrack.internal';
+  v_password := 'Linen' || v_pin || '!';
+
+  if exists (
+    select 1 from auth.users u
+    where lower(u.email) = v_auth_email and u.id <> p_user_id
+  ) then
+    raise exception 'That login code is already in use';
+  end if;
+
+  update public.profiles
+  set
+    full_name = v_name,
+    role = v_role,
+    pin_code = v_pin,
+    contact_email = v_contact_email
+  where profiles.id = p_user_id;
+
+  update public.user_access_roles uar
+  set role = v_role
+  where uar.user_id = p_user_id;
+
+  insert into public.user_access_roles (user_id, role)
+  values (p_user_id, v_role)
+  on conflict on constraint user_access_roles_pkey do update set role = excluded.role;
+
+  if v_old_pin is distinct from v_pin then
+    update auth.users
+    set
+      email = v_auth_email,
+      encrypted_password = extensions.crypt(v_password, extensions.gen_salt('bf')),
+      raw_user_meta_data = coalesce(raw_user_meta_data, '{}'::jsonb)
+        || jsonb_build_object(
+          'full_name', v_name,
+          'role', v_role,
+          'pin_code', v_pin,
+          'contact_email', v_contact_email
+        ),
+      updated_at = now()
+    where auth.users.id = p_user_id;
+
+    update auth.identities i
+    set
+      provider_id = v_auth_email,
+      identity_data = jsonb_build_object('sub', p_user_id::text, 'email', v_auth_email),
+      updated_at = now()
+    where i.user_id = p_user_id and i.provider = 'email';
+  else
+    update auth.users
+    set
+      raw_user_meta_data = coalesce(raw_user_meta_data, '{}'::jsonb)
+        || jsonb_build_object(
+          'full_name', v_name,
+          'role', v_role,
+          'pin_code', v_pin,
+          'contact_email', v_contact_email
+        ),
+      updated_at = now()
+    where auth.users.id = p_user_id;
+  end if;
+
+  return query
+  select
+    p.id as user_id,
+    p.pin_code,
+    p.full_name,
+    p.contact_email,
+    coalesce(uar.role, p.role, 'staff') as role,
+    coalesce(p.is_active, true) as is_active,
+    coalesce(p.created_at, now()) as created_at
+  from public.profiles p
+  left join public.user_access_roles uar on uar.user_id = p.id
+  where p.id = p_user_id;
+end;
+$$;
+
+revoke all on function public.admin_update_user_account(uuid, text, text, text, text) from public;
+grant execute on function public.admin_update_user_account(uuid, text, text, text, text) to authenticated;
+
+drop function if exists public.get_storage_room_summaries();
+drop function if exists public.get_linen_counts_by_room();
+
+create or replace function public.get_storage_room_summaries()
+returns table (
+  id uuid,
+  name text,
+  building text,
+  low_threshold integer,
+  critical_threshold integer,
+  total_bundles bigint,
+  last_count_time timestamptz,
+  last_count_staff text
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  with room_totals as (
+    select
+      s.location_id,
+      coalesce(sum(b.current_balance), 0)::bigint as total_bundles,
+      max(b.updated_at) as latest_balance_update
+    from public.shelves s
+    left join public.balances b on b.shelf_id = s.id
+    where s.is_active = true
+    group by s.location_id
+  ),
+  latest_logs as (
+    select distinct on (le.location_id)
+      le.location_id,
+      le.created_at,
+      le.staff_name
+    from public.log_entries le
+    where le.location_id is not null
+    order by le.location_id, le.created_at desc
+  )
+  select
+    l.id,
+    l.name,
+    l.building,
+    l.low_threshold,
+    l.critical_threshold,
+    coalesce(rt.total_bundles, 0) as total_bundles,
+    coalesce(ll.created_at, rt.latest_balance_update) as last_count_time,
+    ll.staff_name as last_count_staff
+  from public.locations l
+  left join room_totals rt on rt.location_id = l.id
+  left join latest_logs ll on ll.location_id = l.id
+  where l.is_active = true
+    and l.mode = 'full'
+  order by l.created_at asc;
+$$;
+
+create or replace function public.get_linen_counts_by_room()
+returns table (
+  location_id uuid,
+  location_name text,
+  item_id uuid,
+  item_label text,
+  current_balance integer,
+  updated_at timestamptz
+)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select
+    b.location_id,
+    loc.name as location_name,
+    b.item_id,
+    i.label as item_label,
+    b.current_balance,
+    b.updated_at
+  from public.balances b
+  inner join public.shelves s on s.id = b.shelf_id and s.is_active = true
+  inner join public.locations loc on loc.id = b.location_id and loc.is_active = true
+  inner join public.items i on i.id = b.item_id and i.is_active = true
+  where b.current_balance > 0 or b.updated_at is not null
+  order by loc.name asc, i.label asc;
+$$;
+
+revoke all on function public.get_storage_room_summaries() from public;
+grant execute on function public.get_storage_room_summaries() to authenticated;
+
+revoke all on function public.get_linen_counts_by_room() from public;
+grant execute on function public.get_linen_counts_by_room() to authenticated;
 
 -- profiles: users can read their own, admins can read all
 create policy "Users can read own profile"
@@ -519,6 +872,10 @@ create policy "Authenticated users can update balances"
 create policy "Authenticated users can insert balances"
   on balances for insert
   with check (auth.role() = 'authenticated');
+
+create policy "Authenticated users can delete balances"
+  on balances for delete
+  using (auth.role() = 'authenticated');
 
 -- shelves / racks: authenticated users can read and manage
 create policy "Authenticated users can read shelves"
@@ -706,7 +1063,7 @@ create trigger shelf_items_create_balance
 insert into locations (name, mode, building) values
 ('Mailroom linen', 'full', 'Storage'),
 ('Joe west linen', 'full', 'Storage'),
-('CVA OHG', 'full', 'Storage'),
+('CVA OGH', 'full', 'Storage'),
 ('P1 Storage', 'full', 'Storage'),
 ('SVP', 'full', 'Storage');
 

@@ -1,6 +1,6 @@
 import {
   CalendarDays,
-  CheckSquare,
+  ClipboardList,
   Layers,
   LayoutDashboard,
   Package,
@@ -11,13 +11,13 @@ import { NavLink } from 'react-router-dom'
 const staffTabs = [
   { label: 'Dashboard', icon: LayoutDashboard, to: '/dashboard' },
   { label: 'Inventory', icon: Package, to: '/inventory' },
-  { label: 'Tasks', icon: CheckSquare, to: '/staff-todos' },
+  { label: 'Mission', icon: ClipboardList, to: '/mission' },
   { label: 'Events', icon: CalendarDays, to: '/events' },
 ]
 
 const adminTabs = [
   { label: 'Overview', icon: LayoutDashboard, to: '/dashboard' },
-  { label: 'Todos', icon: CheckSquare, to: '/admin-todos' },
+  { label: 'Mission', icon: ClipboardList, to: '/mission' },
   { label: 'Racks', icon: Layers, to: '/admin-racks' },
   { label: 'Schedule', icon: CalendarDays, to: '/admin-schedule' },
   { label: 'Staff', icon: Users, to: '/admin-staff' },

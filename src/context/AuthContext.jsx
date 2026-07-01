@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabase'
 import { clearLocationsCache, getProfile } from '../lib/queries'
+import { pinToAuthCredentials } from '../lib/pinAuth'
 
 const AuthContext = createContext(null)
 const normalizeRole = (role) => String(role || '').trim().toLowerCase()
@@ -33,6 +34,28 @@ const buildFallbackProfile = (sessionUser) => {
   }
 }
 
+async function loadProfileForUser(sessionUser) {
+  const metadataRole = sessionUser?.user_metadata?.role || sessionUser?.app_metadata?.role
+
+  try {
+    const profileData = await getProfile(sessionUser.id)
+    if (!profileData) return buildFallbackProfile(sessionUser)
+
+    const dbRole = normalizeRole(profileData.role)
+    const metaRole = normalizeRole(metadataRole)
+    let role = resolveRole(profileData.role || metadataRole, sessionUser)
+
+    if (!profileData.roleFromAccessTable && metaRole === 'admin' && dbRole === 'staff') {
+      role = resolveRole('admin', sessionUser)
+    }
+
+    const { roleFromAccessTable: _roleFromAccessTable, ...profile } = profileData
+    return { ...profile, role }
+  } catch (_error) {
+    return buildFallbackProfile(sessionUser)
+  }
+}
+
 export function LoadingScreen() {
   return (
     <div className="linentrack-loading-screen">
@@ -45,100 +68,110 @@ export function AuthProvider({ children }) {
   const navigate = useNavigate()
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [sessionReady, setSessionReady] = useState(false)
+  const [profileReady, setProfileReady] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const signingOutRef = useRef(false)
+  const profileRequestIdRef = useRef(0)
+
+  const loading = !sessionReady || (Boolean(user?.id) && !profileReady)
 
   useEffect(() => {
     let mounted = true
-    const bootstrapTimeout = setTimeout(() => {
-      if (mounted) setLoading(false)
-    }, 3000)
 
-    const initSession = async () => {
+    const clearLocalAuth = async () => {
       try {
-        const { data, error } = await supabase.auth.getSession()
-        if (error) throw error
-        const sessionUser = data?.session?.user ?? null
-        if (!mounted || signingOutRef.current) return
-
-        setUser(sessionUser)
-        if (sessionUser) {
-          try {
-            const profileData = await getProfile(sessionUser.id)
-            if (mounted) {
-              if (profileData) {
-                setProfile({
-                  ...profileData,
-                  role: resolveRole(profileData?.role, sessionUser),
-                })
-              } else {
-                setProfile(buildFallbackProfile(sessionUser))
-              }
-            }
-          } catch (_error) {
-            if (mounted) setProfile(buildFallbackProfile(sessionUser))
-          }
-        } else {
-          setProfile(null)
-        }
-      } catch (error) {
-        if (mounted) {
-          setUser(null)
-          setProfile(null)
-        }
-      } finally {
-        if (mounted) setLoading(false)
+        await supabase.auth.signOut({ scope: 'local' })
+      } catch (_error) {
+        // Ignore local sign-out failures.
       }
     }
 
-    initSession()
+    const initAuth = async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession()
+        if (error) throw error
+        if (!mounted || signingOutRef.current) return
+        setUser(data.session?.user ?? null)
+      } catch (_error) {
+        await clearLocalAuth()
+        if (mounted && !signingOutRef.current) {
+          setUser(null)
+          setProfile(null)
+          setProfileReady(true)
+        }
+      } finally {
+        if (mounted) setSessionReady(true)
+      }
+    }
+
+    initAuth()
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (signingOutRef.current && event !== 'SIGNED_OUT') return
+      if (!mounted) return
       clearLocationsCache()
-      const sessionUser = session?.user ?? null
-      setUser(sessionUser)
-      if (sessionUser) {
-        try {
-          const profileData = await getProfile(sessionUser.id)
-          if (mounted) {
-            if (profileData) {
-              setProfile({
-                ...profileData,
-                role: resolveRole(profileData?.role, sessionUser),
-              })
-            } else {
-              setProfile(buildFallbackProfile(sessionUser))
-            }
-          }
-        } catch (_error) {
-          if (mounted) {
-            setProfile((current) => {
-              if (current?.id === sessionUser.id && normalizeRole(current?.role)) return current
-              return buildFallbackProfile(sessionUser)
-            })
-          }
+      setUser(session?.user ?? null)
+      setSessionReady(true)
+      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+        if (!session) {
+          setProfile(null)
+          setProfileReady(true)
         }
-      } else if (mounted) {
-        setProfile(null)
       }
-
-      if (mounted) setLoading(false)
     })
 
     return () => {
       mounted = false
-      clearTimeout(bootstrapTimeout)
       subscription.unsubscribe()
     }
   }, [])
 
-  const signIn = async (email, password) => {
+  useEffect(() => {
+    if (!sessionReady) return undefined
+
+    if (!user?.id) {
+      setProfile(null)
+      setProfileReady(true)
+      return undefined
+    }
+
+    let cancelled = false
+    const requestId = ++profileRequestIdRef.current
+    setProfileReady(false)
+
+    loadProfileForUser(user)
+      .then((nextProfile) => {
+        if (cancelled || requestId !== profileRequestIdRef.current) return
+        setProfile(nextProfile)
+      })
+      .catch(() => {
+        if (cancelled || requestId !== profileRequestIdRef.current) return
+        setProfile(buildFallbackProfile(user))
+      })
+      .finally(() => {
+        if (cancelled || requestId !== profileRequestIdRef.current) return
+        setProfileReady(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [sessionReady, user?.id])
+
+  const signInWithPin = async (pin) => {
+    const { email, password } = pinToAuthCredentials(pin)
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
+
+    const sessionUser = data?.user ?? data?.session?.user ?? null
+    if (sessionUser) {
+      setUser(sessionUser)
+      setSessionReady(true)
+    }
+
     return data
   }
 
@@ -146,14 +179,14 @@ export function AuthProvider({ children }) {
     signingOutRef.current = true
     setSigningOut(true)
     try {
-      // Use full sign-out so refresh tokens are revoked and session does not rehydrate.
       await supabase.auth.signOut()
     } catch (_error) {
       // Even if remote sign-out fails, clear local state so UI can recover.
     } finally {
       setUser(null)
       setProfile(null)
-      setLoading(false)
+      setProfileReady(true)
+      setSessionReady(true)
       navigate('/login', { replace: true })
       if (window.location.pathname !== '/login') {
         window.location.replace('/login')
@@ -164,7 +197,7 @@ export function AuthProvider({ children }) {
   }
 
   const value = useMemo(
-    () => ({ user, profile, loading, signingOut, signIn, signOut, LoadingScreen }),
+    () => ({ user, profile, loading, signingOut, signInWithPin, signOut, LoadingScreen }),
     [user, profile, loading, signingOut],
   )
 

@@ -16,15 +16,18 @@ import {
   startOfWeek,
   subMonths,
 } from 'date-fns'
-import { ChevronLeft, ChevronRight, Truck, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, History, Truck, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 import { addPickupDate, getPickupDates, removePickupDate } from '../lib/queries'
+import { SkeletonCalendarCell } from './Skeleton'
 
 export default function AdminPickupCalendar({
   showAddEvent = false,
   onModalChange = () => { },
   readOnly = false,
+  showHistory = false,
+  onShowHistoryChange = () => { },
 }) {
   const { user } = useAuth()
   const [currentMonth, setCurrentMonth] = useState(startOfMonth(new Date()))
@@ -101,6 +104,33 @@ export default function AdminPickupCalendar({
     }
     return [...grouped.entries()].map(([date, entries]) => ({ date, entries }))
   }, [upcomingPickups])
+
+  const pastEventGroups = useMemo(() => {
+    const today = startOfDay(new Date())
+    const monthStart = format(startOfMonth(currentMonth), 'yyyy-MM-dd')
+    const monthEnd = format(endOfMonth(currentMonth), 'yyyy-MM-dd')
+
+    const pastEntries = pickupDates
+      .filter((entry) => {
+        if (entry.pickup_date < monthStart || entry.pickup_date > monthEnd) return false
+        return isBefore(parseISO(entry.pickup_date), today)
+      })
+      .sort((a, b) => {
+        if (a.pickup_date !== b.pickup_date) return b.pickup_date.localeCompare(a.pickup_date)
+        const aTime = parseEventNotes(a.notes).startTime || ''
+        const bTime = parseEventNotes(b.notes).startTime || ''
+        return bTime.localeCompare(aTime)
+      })
+
+    const grouped = new Map()
+    for (const entry of pastEntries) {
+      const list = grouped.get(entry.pickup_date) || []
+      list.push(entry)
+      grouped.set(entry.pickup_date, list)
+    }
+
+    return [...grouped.entries()].map(([date, entries]) => ({ date, entries }))
+  }, [pickupDates, currentMonth])
 
   useEffect(
     () => () => {
@@ -232,74 +262,105 @@ export default function AdminPickupCalendar({
   return (
     <section className="mb-6">
       <div className="brutal-card bg-white p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <button type="button" className="brutal-btn h-9 w-9 bg-white" onClick={() => setCurrentMonth((m) => subMonths(m, 1))}>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            className="brutal-btn h-9 w-9 shrink-0 bg-white"
+            onClick={() => {
+              setCurrentMonth((m) => subMonths(m, 1))
+              onShowHistoryChange(false)
+            }}
+          >
             <ChevronLeft size={16} />
           </button>
-          <p className="text-[16px] font-extrabold uppercase">{format(currentMonth, 'MMMM yyyy')}</p>
-          <button type="button" className="brutal-btn h-9 w-9 bg-white" onClick={() => setCurrentMonth((m) => addMonths(m, 1))}>
+          <p className="text-center text-[16px] font-extrabold uppercase">{format(currentMonth, 'MMMM yyyy')}</p>
+          <button
+            type="button"
+            className="brutal-btn h-9 w-9 shrink-0 bg-white"
+            onClick={() => {
+              setCurrentMonth((m) => addMonths(m, 1))
+              onShowHistoryChange(false)
+            }}
+          >
             <ChevronRight size={16} />
           </button>
         </div>
 
-        <div className="mb-2 grid grid-cols-7 border-b-2 border-ink pb-2 text-center text-[10px] font-bold uppercase tracking-[0.08em]">
-          {['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].map((day) => (
-            <div key={day}>{day}</div>
-          ))}
-        </div>
-
-        {loading ? (
-          <div className="grid grid-cols-7 gap-1">
-            {Array.from({ length: 35 }).map((_, idx) => (
-              <div key={idx} className="skeleton h-[72px] sm:h-[78px]" />
-            ))}
-          </div>
+        {showHistory ? (
+          <PastEventsList
+            groups={pastEventGroups}
+            monthLabel={format(currentMonth, 'MMMM yyyy')}
+            onOpenDate={openEventDrawer}
+          />
         ) : (
-          <div className="grid grid-cols-7 gap-1">
-            {gridDays.map((date) => {
-              const dateKey = format(date, 'yyyy-MM-dd')
-              const dayEvents = eventsByDate.get(dateKey) || []
-              const hasEvents = dayEvents.length > 0
-              const inCurrentMonth = isSameMonth(date, currentMonth)
-              const isPast = isBefore(date, startOfDay(new Date()))
-              const isTodayDate = isSameDay(date, new Date())
+          <>
+            <div className="mb-2 grid grid-cols-7 border-b-2 border-ink pb-2 text-center text-[10px] font-bold uppercase tracking-[0.08em]">
+              {['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].map((day) => (
+                <div key={day}>{day}</div>
+              ))}
+            </div>
 
-              if (!inCurrentMonth) {
-                return <div key={dateKey} className="h-[72px] bg-cream sm:h-[78px]" />
-              }
+            {loading ? (
+              <div className="grid grid-cols-7 gap-1">
+                {Array.from({ length: 35 }).map((_, idx) => (
+                  <SkeletonCalendarCell key={idx} />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-7 gap-1">
+                {gridDays.map((date) => {
+                  const dateKey = format(date, 'yyyy-MM-dd')
+                  const dayEvents = eventsByDate.get(dateKey) || []
+                  const hasEvents = dayEvents.length > 0
+                  const inCurrentMonth = isSameMonth(date, currentMonth)
+                  const isPast = isBefore(date, startOfDay(new Date()))
+                  const isTodayDate = isSameDay(date, new Date())
 
-              return (
-                <button
-                  key={dateKey}
-                  type="button"
-                  onClick={() => handleDateClick(date)}
-                  className={`relative h-[72px] border text-center sm:h-[78px] ${hasEvents
-                    ? isPast
-                      ? 'border-[#E8E4DC] bg-[#E8E4DC] text-[#6B6B6B]'
-                      : 'border-ink bg-ink text-white'
-                    : 'border-[#E8E4DC] bg-white'
-                    } ${isTodayDate ? 'border-[2.5px] border-ink font-extrabold' : 'border-[1.5px]'} ${!hasEvents && !isPast ? 'hover:border-primary hover:bg-[#DCE7FF]' : ''}`}
-                >
-                  <div className="flex h-full flex-col items-center justify-center px-1">
-                    <span className="mono text-[14px] font-bold">{format(date, 'd')}</span>
-                    {hasEvents ? <Truck size={10} className="mt-0.5" /> : null}
-                    {dayEvents.slice(0, 2).map((eventEntry) => {
-                      const title = parseEventNotes(eventEntry.notes).title
-                      if (!title) return null
-                      return (
-                        <span key={eventEntry.id} className="mt-0.5 max-w-[95%] truncate text-[8px] font-bold uppercase leading-none">
-                          {title}
-                        </span>
-                      )
-                    })}
-                    {dayEvents.length > 2 ? (
-                      <span className="mt-0.5 text-[8px] font-bold leading-none">+{dayEvents.length - 2} more</span>
-                    ) : null}
-                  </div>
-                </button>
-              )
-            })}
-          </div>
+                  if (!inCurrentMonth) {
+                    return <div key={dateKey} className="h-[72px] bg-cream sm:h-[78px]" />
+                  }
+
+                  let cellClass = 'border-[#E8E4DC] bg-white text-ink'
+                  if (isPast && hasEvents) {
+                    cellClass = 'border-[#A8A49C] bg-[#8A8680] text-white'
+                  } else if (isPast) {
+                    cellClass = 'border-[#D4D0C8] bg-[#E4E0D8] text-[#7A7670]'
+                  } else if (hasEvents) {
+                    cellClass = 'border-ink bg-ink text-white'
+                  }
+
+                  return (
+                    <button
+                      key={dateKey}
+                      type="button"
+                      onClick={() => handleDateClick(date)}
+                      className={`relative h-[72px] border text-center sm:h-[78px] ${cellClass} ${isTodayDate ? 'border-[2.5px] border-ink font-extrabold' : 'border-[1.5px]'} ${!hasEvents && !isPast ? 'hover:border-primary hover:bg-[#DCE7FF]' : ''} ${isPast && hasEvents ? 'hover:bg-[#7A7670]' : ''}`}
+                    >
+                      <div className="flex h-full flex-col items-center justify-center px-1">
+                        <span className="mono text-[14px] font-bold">{format(date, 'd')}</span>
+                        {hasEvents ? <Truck size={10} className="mt-0.5 opacity-90" /> : null}
+                        {dayEvents.slice(0, 2).map((eventEntry) => {
+                          const title = parseEventNotes(eventEntry.notes).title
+                          if (!title) return null
+                          return (
+                            <span
+                              key={eventEntry.id}
+                              className="mt-0.5 max-w-[95%] truncate text-[8px] font-bold uppercase leading-none"
+                            >
+                              {title}
+                            </span>
+                          )
+                        })}
+                        {dayEvents.length > 2 ? (
+                          <span className="mt-0.5 text-[8px] font-bold leading-none">+{dayEvents.length - 2} more</span>
+                        ) : null}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -485,7 +546,74 @@ export default function AdminPickupCalendar({
   )
 }
 
+function PastEventsList({ groups, monthLabel, onOpenDate }) {
+  if (!groups.length) {
+    return (
+      <div className="border-[1.5px] border-stone bg-cream px-4 py-8 text-center">
+        <p className="text-[12px] font-semibold uppercase text-[#6B6B6B]">No past events in {monthLabel}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">
+        Past events · {monthLabel}
+      </p>
+      {groups.map((group) => {
+        const date = parseISO(group.date)
+        const daysAgo = Math.abs(differenceInCalendarDays(date, new Date()))
+        const agoLabel = daysAgo === 0 ? 'Today' : daysAgo === 1 ? '1 day ago' : `${daysAgo} days ago`
+
+        return (
+          <div key={group.date} className="brutal-card mb-2 bg-[#ECEAE4] p-3">
+            <button
+              type="button"
+              className="mb-2 flex w-full items-center gap-2 border-b border-[#C8C4BC] pb-2 text-left"
+              onClick={() => onOpenDate(date)}
+            >
+              <Truck size={14} className="text-[#6B6B6B]" />
+              <div className="flex-1">
+                <p className="text-[13px] font-semibold text-[#4A4A4A]">{format(date, 'EEEE, MMMM d')}</p>
+                <p className="text-[10px] uppercase tracking-[0.08em] text-[#8A8A8A]">
+                  {group.entries.length} event{group.entries.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <span className="mono text-[11px] font-bold text-[#8A8A8A]">{agoLabel}</span>
+            </button>
+
+            <div className="space-y-1.5">
+              {group.entries.map((entry) => {
+                const parsed = parseEventNotes(entry.notes)
+                return (
+                  <div
+                    key={entry.id}
+                    className="flex items-start gap-2 rounded-sm border border-[#C8C4BC] bg-[#E4E0D8] px-2 py-2"
+                  >
+                    <div className="flex-1">
+                      <p className="text-[12px] font-semibold text-[#4A4A4A]">{parsed.title || 'Scheduled event'}</p>
+                      {parsed.startTime || parsed.endTime ? (
+                        <p className="mono text-[10px] text-[#8A8A8A]">
+                          {parsed.startTime || '--:--'} - {parsed.endTime || '--:--'}
+                        </p>
+                      ) : null}
+                      {parsed.description ? (
+                        <p className="text-[10px] text-[#8A8A8A]">{parsed.description}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function EventDetailsDrawer({ date, entries, open, onClose }) {
+  const isPastDate = isBefore(date, startOfDay(new Date()))
   const overlayStateClass = open ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
   const panelStateClass = open ? 'translate-x-0' : 'translate-x-full'
   return (
@@ -510,8 +638,9 @@ function EventDetailsDrawer({ date, entries, open, onClose }) {
                 Close ✕
               </button>
             </div>
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap gap-2">
               <span className="stamp stamp-amber">{entries.length} EVENT{entries.length === 1 ? '' : 'S'}</span>
+              {isPastDate ? <span className="stamp stamp-gray">PAST</span> : null}
             </div>
           </div>
 
@@ -550,6 +679,21 @@ function startOfDay(date) {
   const next = new Date(date)
   next.setHours(0, 0, 0, 0)
   return next
+}
+
+export function ViewHistoryButton({ active = false, onClick, className = '' }) {
+  return (
+    <button
+      type="button"
+      className={`brutal-btn flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold uppercase ${
+        active ? 'bg-ink text-white' : 'bg-white text-ink'
+      } ${className}`}
+      onClick={onClick}
+    >
+      <History size={14} />
+      {active ? 'Back to Calendar' : 'View History'}
+    </button>
+  )
 }
 
 const WEEKDAY_OPTIONS = [

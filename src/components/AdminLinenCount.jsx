@@ -3,19 +3,33 @@ import { format, formatDistanceToNowStrict } from 'date-fns'
 import { ArrowUpRight, Layers } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabase'
-import { SETTINGS } from '../config/settings'
 import { getLinenCountByRoom, getStorageRooms } from '../lib/queries'
+import { SkeletonLinenCountCard } from './Skeleton'
+
+const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OGH', 'P1 Storage', 'SVP']
+
+const sortRooms = (rooms) =>
+  [...(Array.isArray(rooms) ? rooms : [])].sort((a, b) => {
+    const aIndex = ROOM_ORDER.indexOf(a.name)
+    const bIndex = ROOM_ORDER.indexOf(b.name)
+    if (aIndex === -1 && bIndex === -1) return a.name.localeCompare(b.name)
+    if (aIndex === -1) return 1
+    if (bIndex === -1) return -1
+    return aIndex - bIndex
+  })
 
 function normalizeRows(rows) {
   return (rows || []).reduce(
     (acc, row) => {
-      const roomName = row?.locations?.name || row?.locations?.[0]?.name
-      const itemLabel = row?.items?.label || row?.items?.[0]?.label
+      const roomName = row?.location_name || row?.locations?.name || row?.locations?.[0]?.name
+      const roomId = row?.location_id || row?.locations?.id || row?.locations?.[0]?.id
+      const itemLabel = row?.item_label || row?.items?.label || row?.items?.[0]?.label
       const count = Number(row?.current_balance || 0)
       if (!roomName || !itemLabel) return acc
       if (!acc.rooms[roomName]) {
-        acc.rooms[roomName] = { total: 0, latestUpdate: null }
+        acc.rooms[roomName] = { total: 0, latestUpdate: null, id: roomId || null }
       }
+      if (roomId && !acc.rooms[roomName].id) acc.rooms[roomName].id = roomId
       acc.rooms[roomName][itemLabel] = (acc.rooms[roomName][itemLabel] || 0) + count
       acc.rooms[roomName].total += count
 
@@ -34,33 +48,57 @@ export default function AdminLinenCount() {
   const navigate = useNavigate()
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
-  const [storageRooms, setStorageRooms] = useState([])
+  const [rooms, setRooms] = useState([])
 
   const refetch = async () => {
     try {
       setLoading(true)
-      const [linenRows, rooms] = await Promise.all([getLinenCountByRoom(), getStorageRooms()])
+      const [linenRows, storageRoomRows] = await Promise.all([
+        getLinenCountByRoom(),
+        getStorageRooms(),
+      ])
       setRows(linenRows)
-      setStorageRooms((rooms || []).map((room) => room.name).filter(Boolean))
+      setRooms(
+        sortRooms(
+          (storageRoomRows || []).map((room) => ({
+            id: room.id,
+            name: room.name,
+          })),
+        ),
+      )
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
+    let debounceTimer = null
+    const scheduleRefetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(refetch, 500)
+    }
+
     refetch()
     const channel = supabase
       .channel('admin-linen')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'balances' }, refetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'balances' }, scheduleRefetch)
       .subscribe()
-    return () => supabase.removeChannel(channel)
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      supabase.removeChannel(channel)
+    }
   }, [])
 
   const normalized = useMemo(() => normalizeRows(rows), [rows])
-  const roomNames = useMemo(() => {
-    if (storageRooms.length) return storageRooms
-    return SETTINGS.storageRooms || []
-  }, [storageRooms])
+  const displayRooms = useMemo(() => {
+    if (rooms.length) return rooms
+    return sortRooms(
+      Object.entries(normalized.rooms).map(([name, data]) => ({
+        id: data.id,
+        name,
+      })),
+    )
+  }, [rooms, normalized.rooms])
   const updatedText = normalized.latestUpdate
     ? `UPDATED ${formatDistanceToNowStrict(normalized.latestUpdate, { addSuffix: true }).toUpperCase()}`
     : 'UPDATED JUST NOW'
@@ -85,38 +123,45 @@ export default function AdminLinenCount() {
       </div>
       {loading ? (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: Math.max(roomNames.length, 5) }).map((_, idx) => (
-            <div key={idx} className="brutal-card bg-white p-4">
-              <div className="skeleton mb-2 h-5 w-32" />
-              <div className="skeleton h-7 w-20" />
-            </div>
+          {Array.from({ length: Math.max(displayRooms.length, 5) }).map((_, idx) => (
+            <SkeletonLinenCountCard key={idx} />
           ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {roomNames.map((roomName) => {
-            const room = normalized.rooms[roomName] || { total: 0, latestUpdate: null }
+          {displayRooms.map((room) => {
+            const stats = normalized.rooms[room.name] || { total: 0, latestUpdate: null, id: null }
+            const roomId = room.id || stats.id
+            const openRoomInventory = () => {
+              if (roomId) navigate(`/inventory?room=${roomId}`)
+            }
+
             return (
-              <div
-                key={roomName}
-                className="group brutal-card bg-white p-4 transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_5px_0_#001A57] active:translate-y-0.5 active:shadow-[2px_2px_0_#001A57]"
+              <button
+                key={room.id || room.name}
+                type="button"
+                onClick={openRoomInventory}
+                disabled={!roomId}
+                className="group brutal-card w-full bg-white p-4 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-[5px_5px_0_#001A57] active:translate-y-0.5 active:shadow-[2px_2px_0_#001A57] disabled:cursor-default disabled:hover:translate-y-0 disabled:hover:shadow-none"
               >
                 <div className="mb-1 flex items-start justify-between gap-2">
-                  <p className="text-[12px] font-extrabold uppercase">{roomName}</p>
+                  <p className="text-[12px] font-extrabold uppercase transition-colors group-hover:text-primary">
+                    {room.name}
+                  </p>
                   <ArrowUpRight
                     size={16}
                     className="text-ink transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
                   />
                 </div>
-                <p className="mono text-[30px] font-bold">{room.total}</p>
+                <p className="mono text-[30px] font-bold">{stats.total}</p>
                 <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Bundles</p>
                 <div className="mt-2 border-t-[1.5px] border-[#E8E4DC] pt-2">
                   <p className="mono text-[11px] font-bold text-[#6B6B6B]">
                     LAST COUNT UPDATE:{' '}
-                    {room.latestUpdate ? format(room.latestUpdate, 'MMM d, yyyy h:mm a') : 'NO UPDATE YET'}
+                    {stats.latestUpdate ? format(stats.latestUpdate, 'MMM d, yyyy h:mm a') : 'NO UPDATE YET'}
                   </p>
                 </div>
-              </div>
+              </button>
             )
           })}
         </div>

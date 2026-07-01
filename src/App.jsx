@@ -5,12 +5,13 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Inventory from './pages/Inventory'
-import AdminTodos from './pages/AdminTodos'
 import AdminSchedule from './pages/AdminSchedule'
 import AdminStaff from './pages/AdminStaff'
 import AdminRacks from './pages/AdminRacks'
 import Profile from './pages/Profile'
 import StaffEvents from './pages/StaffEvents'
+import Mission from './pages/Mission'
+import MissionGroupForm from './pages/MissionGroupForm'
 
 function AppRoutes() {
   return (
@@ -30,22 +31,6 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Inventory />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/admin-todos"
-        element={
-          <ProtectedRoute>
-            <AdminTodos />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/staff-todos"
-        element={
-          <ProtectedRoute>
-            <AdminTodos />
           </ProtectedRoute>
         }
       />
@@ -86,6 +71,30 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <StaffEvents />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/mission"
+        element={
+          <ProtectedRoute>
+            <Mission />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/mission/groups/new"
+        element={
+          <ProtectedRoute>
+            <MissionGroupForm />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/mission/groups/:groupId/edit"
+        element={
+          <ProtectedRoute>
+            <MissionGroupForm />
           </ProtectedRoute>
         }
       />
