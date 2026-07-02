@@ -46,6 +46,37 @@
         </div>
       </div>
     </div>
+    <script>
+      ;(function () {
+        var helpText =
+          'The app did not finish loading on this device. Update iOS/Safari, disable content blockers for this site, then refresh.'
+
+        function showBootFailure(detail) {
+          var root = document.getElementById('root')
+          if (!root || !root.querySelector('.boot-fallback')) return
+          root.innerHTML =
+            '<div class="boot-fallback"><div><strong>LINENTRACK</strong><span style="display:block;margin-top:12px;max-width:460px;line-height:1.5">' +
+            helpText +
+            (detail ? '<br><br><small style="opacity:.75">' + detail + '</small>' : '') +
+            '</span></div></div>'
+        }
+
+        window.addEventListener('error', function (event) {
+          if (event && event.filename && String(event.filename).indexOf('/assets/') !== -1) {
+            showBootFailure(event.message || 'Script failed to load')
+          }
+        })
+
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event && event.reason ? event.reason.message || String(event.reason) : 'Startup failed'
+          showBootFailure(reason)
+        })
+
+        window.setTimeout(function () {
+          showBootFailure('Startup timed out after 12 seconds.')
+        }, 12000)
+      })()
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
