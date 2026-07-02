@@ -58,8 +58,28 @@ async function loadProfileForUser(sessionUser) {
 
 export function LoadingScreen() {
   return (
-    <div className="linentrack-loading-screen">
-      <div className="linentrack-loading-word">LINENTRACK</div>
+    <div
+      className="linentrack-loading-screen"
+      style={{
+        minHeight: '100dvh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#f5f0e8',
+        color: '#001a57',
+      }}
+    >
+      <div
+        className="linentrack-loading-word"
+        style={{
+          fontSize: 32,
+          fontWeight: 800,
+          letterSpacing: '0.08em',
+          color: '#001a57',
+        }}
+      >
+        LINENTRACK
+      </div>
     </div>
   )
 }
@@ -89,9 +109,18 @@ export function AuthProvider({ children }) {
 
     const initAuth = async () => {
       try {
-        const { data, error } = await supabase.auth.getSession()
-        if (error) throw error
+        const result = await Promise.race([
+          supabase.auth.getSession(),
+          new Promise((resolve) => {
+            setTimeout(() => resolve({ timedOut: true }), 10000)
+          }),
+        ])
+
+        if (result?.timedOut) throw new Error('Auth init timed out')
         if (!mounted || signingOutRef.current) return
+
+        const { data, error } = result
+        if (error) throw error
         setUser(data.session?.user ?? null)
       } catch (_error) {
         await clearLocalAuth()

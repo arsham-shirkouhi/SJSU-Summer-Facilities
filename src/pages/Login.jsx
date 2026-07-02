@@ -1,4 +1,3 @@
-import { Hash } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { normalizePinCode } from '../lib/pinAuth'
@@ -43,7 +42,10 @@ export default function Login() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-cream">
+    <div
+      className="relative overflow-hidden bg-cream"
+      style={{ minHeight: '100dvh', paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}
+    >
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(0,26,87,0.24),transparent_40%),radial-gradient(circle_at_85%_15%,rgba(0,56,167,0.22),transparent_42%),radial-gradient(circle_at_50%_95%,rgba(0,26,87,0.2),transparent_45%)]" />
         <div className="absolute -left-20 -top-20 h-80 w-80 rounded-full border-[2.5px] border-ink/30 bg-primary-light/55" />
@@ -53,7 +55,10 @@ export default function Login() {
         <div className="absolute bottom-24 right-10 h-24 w-24 -rotate-6 border-[2.5px] border-ink/25 bg-amber-light/45" />
       </div>
 
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[620px] items-center px-5 py-8">
+      <div
+        className="relative mx-auto flex w-full max-w-[620px] items-center justify-center px-5 py-8"
+        style={{ minHeight: '100dvh' }}
+      >
         <LoginCard
           pinCode={pinCode}
           loading={loading}
@@ -86,8 +91,9 @@ function LoginCard({
   return (
     <form
       onSubmit={onSubmit}
-      className="brutal-card relative w-full bg-white p-7 md:p-10"
+      className="brutal-card relative z-10 w-full bg-white p-7 md:p-10"
       autoComplete="off"
+      style={{ position: 'relative', zIndex: 10 }}
     >
       <div className="mb-6">
         <span className="stamp stamp-amber inline-block -rotate-2">Staff Login</span>
@@ -127,7 +133,12 @@ function LoginCard({
       <label className="block">
         <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.08em]">4-Digit Login Code</div>
         <div className="relative">
-          <Hash size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/80" />
+          <span
+            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[17px] font-bold text-ink/80"
+            aria-hidden="true"
+          >
+            #
+          </span>
           <input
             className="brutal-input !pl-12 text-center !text-[28px] !font-bold tracking-[0.45em]"
             type="text"
