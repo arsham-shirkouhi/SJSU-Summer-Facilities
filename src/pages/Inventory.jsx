@@ -8,10 +8,12 @@ import {
   Layers,
   Minus,
   Package2,
+  Pencil,
   Plus,
   QrCode,
+  Trash2,
 } from 'lucide-react'
-import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import TopBar from '../components/TopBar'
 import {
@@ -19,19 +21,24 @@ import {
   SkeletonCard,
 } from '../components/Skeleton'
 import BottomNav from '../components/BottomNav'
+import { getActiveRackItems, RackDeleteModal, RackFormModal } from '../components/RackSetupModals'
 import { useAuth } from '../context/AuthContext'
 import { SETTINGS } from '../config/settings'
 import {
   adjustShelfItemCount,
+  createRack,
+  deleteRack,
+  getAdminRoomRacks,
   getItems,
   getLocationById,
   getLocations,
   getShelvesByRoom,
   getStorageRooms,
   transferShelfItemCount,
+  updateRack,
 } from '../lib/queries'
 
-const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OGH', 'P1 Storage', 'SVP']
+const ROOM_ORDER = ['Mailroom Storage', 'Joe west linen', 'OGH', 'P1 Storage', 'SVP']
 
 const orderedRooms = (rooms) =>
   [...rooms].sort((a, b) => {
@@ -45,7 +52,6 @@ const orderedRooms = (rooms) =>
 
 export default function Inventory() {
   const { profile, user } = useAuth()
-  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const roomId = searchParams.get('room')
   const shelfId = searchParams.get('shelf')
@@ -62,6 +68,15 @@ export default function Inventory() {
   const [submittingKey, setSubmittingKey] = useState('')
   const [showQrScanner, setShowQrScanner] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
+  const [adminRacks, setAdminRacks] = useState([])
+  const [rackItems, setRackItems] = useState([])
+  const [loadingAdminRacks, setLoadingAdminRacks] = useState(false)
+  const [rackModal, setRackModal] = useState(null)
+  const [confirmDeleteRack, setConfirmDeleteRack] = useState(null)
+  const [rackSubmitting, setRackSubmitting] = useState(false)
+  const [rackDeleting, setRackDeleting] = useState(false)
+
+  const manageRacksMode = searchParams.get('manage') === 'racks'
 
   const fetchRooms = async () => {
     try {
@@ -165,6 +180,31 @@ export default function Inventory() {
     fetchRoomDetail()
   }, [roomId])
 
+  const loadAdminRacks = async () => {
+    if (!roomId) {
+      setAdminRacks([])
+      return
+    }
+    try {
+      setLoadingAdminRacks(true)
+      const [racks, items] = await Promise.all([getAdminRoomRacks(roomId), getItems()])
+      setAdminRacks(racks || [])
+      setRackItems(items || [])
+    } catch (loadError) {
+      toast.error(loadError.message || 'Failed to load rack setup')
+    } finally {
+      setLoadingAdminRacks(false)
+    }
+  }
+
+  useEffect(() => {
+    if (manageRacksMode && roomId) {
+      loadAdminRacks()
+    } else {
+      setAdminRacks([])
+    }
+  }, [manageRacksMode, roomId])
+
   const normalizedRooms = useMemo(() => orderedRooms(rooms), [rooms])
 
   const selectedShelf = useMemo(
@@ -220,7 +260,94 @@ export default function Inventory() {
 
   const openRooms = () => setSearchParams({})
   const openRoom = (targetRoomId) => setSearchParams({ room: targetRoomId })
-  const openShelf = (targetRoomId, targetShelfId) => setSearchParams({ room: targetRoomId, shelf: targetShelfId })
+  const openShelf = (targetRoomId, targetShelfId) => {
+    setSearchParams({ room: targetRoomId, shelf: targetShelfId })
+  }
+  const setManageRacksMode = (enabled) => {
+    if (!roomId) return
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (enabled) next.set('manage', 'racks')
+      else next.delete('manage')
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!roomId && searchParams.get('manage') === 'racks') {
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current)
+        next.delete('manage')
+        return next
+      })
+    }
+  }, [roomId])
+
+  const openCreateRackModal = () => {
+    setRackModal({ mode: 'create', rack: null })
+  }
+
+  const openEditRackModal = (rack) => {
+    const rackItemRows = getActiveRackItems(rack)
+    setRackModal({
+      mode: 'edit',
+      rack,
+      initial: {
+        name: rack.name,
+        itemIds: rackItemRows.map((entry) => entry.item_id),
+      },
+    })
+  }
+
+  const refreshRackViews = async () => {
+    await Promise.all([fetchRoomDetail(), loadAdminRacks(), fetchRooms()])
+  }
+
+  const handleSaveRack = async ({ name, itemIds }) => {
+    if (!roomDetail?.roomId) return
+
+    try {
+      setRackSubmitting(true)
+      if (rackModal?.mode === 'edit' && rackModal.rack?.id) {
+        await updateRack({
+          shelfId: rackModal.rack.id,
+          name: name.trim(),
+          itemIds,
+        })
+        toast.success('Rack updated')
+      } else {
+        await createRack({
+          locationId: roomDetail.roomId,
+          locationName: roomDetail.roomName,
+          name: name.trim(),
+          itemIds,
+        })
+        toast.success('Rack added')
+      }
+      setRackModal(null)
+      await refreshRackViews()
+    } catch (saveError) {
+      toast.error(saveError.message || 'Failed to save rack')
+    } finally {
+      setRackSubmitting(false)
+    }
+  }
+
+  const handleDeleteRack = async () => {
+    if (!confirmDeleteRack?.id) return
+
+    try {
+      setRackDeleting(true)
+      await deleteRack({ shelfId: confirmDeleteRack.id })
+      toast.success('Rack deleted')
+      setConfirmDeleteRack(null)
+      await refreshRackViews()
+    } catch (deleteError) {
+      toast.error(deleteError.message || 'Failed to delete rack')
+    } finally {
+      setRackDeleting(false)
+    }
+  }
   const handleQrDetected = (rawValue) => {
     const parsed = parseInventoryQr(rawValue)
     if (!parsed?.roomId) {
@@ -264,18 +391,21 @@ export default function Inventory() {
   const normalizedRole = String(profile?.role || '').trim().toLowerCase()
   const isAdmin = normalizedRole === 'admin'
 
-  const roomHeaderActions = (
+  const manageRacksButton = isAdmin ? (
+    <button
+      type="button"
+      className={`brutal-btn flex items-center gap-1.5 px-3 py-1.5 text-[11px] ${
+        manageRacksMode ? 'bg-ink text-white' : 'bg-white'
+      }`}
+      onClick={() => setManageRacksMode(!manageRacksMode)}
+    >
+      <Layers size={14} />
+      {manageRacksMode ? 'Done Managing' : 'Manage Racks'}
+    </button>
+  ) : null
+
+  const listHeaderActions = (
     <>
-      {isAdmin ? (
-        <button
-          type="button"
-          className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px]"
-          onClick={() => navigate('/admin-racks')}
-        >
-          <Layers size={14} />
-          Manage Racks
-        </button>
-      ) : null}
       <button
         type="button"
         className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px]"
@@ -306,7 +436,7 @@ export default function Inventory() {
             'Select a room to view racks',
             null,
             '',
-            roomHeaderActions,
+            listHeaderActions,
           )}
 
           {error ? (
@@ -360,20 +490,126 @@ export default function Inventory() {
   }
 
   if (roomId && !shelfId) {
+    const roomRackHeaderActions = isAdmin ? (
+      <>
+        {manageRacksMode ? (
+          <button
+            type="button"
+            className="brutal-btn flex items-center gap-1.5 bg-primary px-3 py-1.5 text-[11px] text-white"
+            onClick={openCreateRackModal}
+          >
+            <Plus size={14} />
+            Add Rack
+          </button>
+        ) : null}
+        {manageRacksButton}
+      </>
+    ) : null
+
     return (
       <div className="min-h-screen bg-cream">
         <TopBar />
         <main className="mx-auto w-full max-w-[1024px] px-4 pb-20 pt-20 sm:px-6 md:px-8">
-          {renderHeader('Room Racks', roomDetail?.roomName || 'Room', 'Select a rack to start count', openRooms, 'Back to Rooms')}
+          {renderHeader(
+            manageRacksMode ? 'Rack Setup' : 'Room Racks',
+            roomDetail?.roomName || 'Room',
+            manageRacksMode ? 'Add racks and assign linen items' : 'Select a rack to start count',
+            openRooms,
+            'Back to Rooms',
+            roomRackHeaderActions,
+          )}
 
-          {detailError ? (
+          {manageRacksMode ? (
+            loadingAdminRacks || detailLoading ? (
+              <InventorySkeleton />
+            ) : !adminRacks.length ? (
+              <div className="brutal-card bg-white p-4">
+                <p className="text-[13px] font-semibold">No racks yet for this room.</p>
+                <p className="mt-1 text-[12px] text-[#6B6B6B]">
+                  Add a rack name and choose which linen items belong on it.
+                </p>
+                <button
+                  type="button"
+                  className="brutal-btn mt-3 bg-amber px-3 py-2 text-[11px]"
+                  onClick={openCreateRackModal}
+                >
+                  Add First Rack
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {adminRacks.map((rack) => {
+                  const rackItemRows = getActiveRackItems(rack)
+                  return (
+                    <div key={rack.id} className="brutal-card bg-white p-4">
+                      <div className="mb-2 flex items-start justify-between gap-2 border-b-2 border-stone pb-2">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">Rack</p>
+                          <h3 className="text-[18px] font-extrabold uppercase">{rack.name}</h3>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            className="brutal-btn flex items-center gap-1 bg-white px-2 py-1 text-[10px]"
+                            onClick={() => openEditRackModal(rack)}
+                          >
+                            <Pencil size={12} />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="brutal-btn flex items-center gap-1 bg-danger-light px-2 py-1 text-[10px] text-ink"
+                            onClick={() => setConfirmDeleteRack(rack)}
+                          >
+                            <Trash2 size={12} />
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                      {rackItemRows.length ? (
+                        <div className="flex flex-wrap gap-2">
+                          {rackItemRows.map((entry) => (
+                            <span key={entry.item_id} className="stamp stamp-blue">
+                              {entry.items?.label || entry.items?.name || 'Item'}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[12px] text-[#6B6B6B]">No items assigned yet.</p>
+                          <button
+                            type="button"
+                            className="text-[11px] font-bold uppercase text-primary"
+                            onClick={() => openEditRackModal(rack)}
+                          >
+                            Assign Items →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          ) : detailError ? (
             <ErrorPanel message={detailError} onRetry={fetchRoomDetail} />
           ) : detailLoading ? (
             <InventorySkeleton />
           ) : !roomDetail?.shelves?.length ? (
             <div className="brutal-card bg-white p-4">
               <p className="text-[13px] font-semibold">No racks yet for this room.</p>
-              <p className="mt-1 text-[12px] text-[#6B6B6B]">Add racks later and they will appear here.</p>
+              <p className="mt-1 text-[12px] text-[#6B6B6B]">
+                {isAdmin ? 'Turn on Manage Racks to add racks to this room.' : 'Ask an admin to set up racks for this room.'}
+              </p>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  className="brutal-btn mt-3 bg-amber px-3 py-2 text-[11px]"
+                  onClick={() => setManageRacksMode(true)}
+                >
+                  Manage Racks
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -400,6 +636,26 @@ export default function Inventory() {
             </div>
           )}
         </main>
+
+        {rackModal ? (
+          <RackFormModal
+            mode={rackModal.mode}
+            roomName={roomDetail?.roomName}
+            items={rackItems}
+            initial={rackModal.initial}
+            submitting={rackSubmitting}
+            onClose={() => setRackModal(null)}
+            onSubmit={handleSaveRack}
+          />
+        ) : null}
+
+        <RackDeleteModal
+          rack={confirmDeleteRack}
+          deleting={rackDeleting}
+          onCancel={() => setConfirmDeleteRack(null)}
+          onConfirm={handleDeleteRack}
+        />
+
         <BottomNav role={profile?.role} />
       </div>
     )
@@ -453,7 +709,7 @@ export default function Inventory() {
             <div className="space-y-2">
               {!selectedShelf.rows.length ? (
                 <p className="text-[12px] text-[#6B6B6B]">
-                  No items assigned to this rack yet. An admin can set them up in Rack Setup.
+                  No items assigned to this rack yet. An admin can assign items with Manage Racks.
                 </p>
               ) : null}
               {selectedShelf.rows.map((row) => {

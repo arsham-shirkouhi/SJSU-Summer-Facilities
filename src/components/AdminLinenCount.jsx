@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format, formatDistanceToNowStrict } from 'date-fns'
-import { ArrowUpRight, Layers } from 'lucide-react'
+import { ArrowUpRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabase'
 import { getLinenCountByRoom, getStorageRooms } from '../lib/queries'
 import { SkeletonLinenCountCard } from './Skeleton'
 
-const ROOM_ORDER = ['Mailroom linen', 'Joe west linen', 'CVA OGH', 'P1 Storage', 'SVP']
+const ROOM_ORDER = ['Mailroom Storage', 'Joe west linen', 'OGH', 'P1 Storage', 'SVP']
 
 const sortRooms = (rooms) =>
   [...(Array.isArray(rooms) ? rooms : [])].sort((a, b) => {
@@ -110,14 +110,6 @@ export default function AdminLinenCount() {
           Linen Count
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="brutal-btn flex items-center gap-1.5 bg-amber px-3 py-1.5 text-[10px]"
-            onClick={() => navigate('/admin-racks')}
-          >
-            <Layers size={13} />
-            Manage Racks
-          </button>
           <p className="mono text-[10px] text-[#6B6B6B]">{updatedText}</p>
         </div>
       </div>

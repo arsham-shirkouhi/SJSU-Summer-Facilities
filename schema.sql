@@ -1061,9 +1061,9 @@ create trigger shelf_items_create_balance
 
 -- seed locations
 insert into locations (name, mode, building) values
-('Mailroom linen', 'full', 'Storage'),
+('Mailroom Storage', 'full', 'Storage'),
 ('Joe west linen', 'full', 'Storage'),
-('CVA OGH', 'full', 'Storage'),
+('OGH', 'full', 'Storage'),
 ('P1 Storage', 'full', 'Storage'),
 ('SVP', 'full', 'Storage');
 
@@ -1090,7 +1090,7 @@ cross join (
     ('Rack A - Towels', 'mailroom-rack-a'),
     ('Rack B - Sheets', 'mailroom-rack-b')
 ) as rack(name, qr_slug)
-where l.name = 'Mailroom linen';
+where l.name = 'Mailroom Storage';
 
 -- assign which items belong on each starter rack
 insert into shelf_items (shelf_id, item_id, sort_order)
@@ -1107,7 +1107,7 @@ join (
 ) as cfg(qr_slug, item_name, sort_order)
   on cfg.qr_slug = s.qr_slug
 join items i on i.name = cfg.item_name
-where l.name = 'Mailroom linen';
+where l.name = 'Mailroom Storage';
 
 -- balances start at zero via shelf_items trigger (ensure_shelf_item_balance)
 

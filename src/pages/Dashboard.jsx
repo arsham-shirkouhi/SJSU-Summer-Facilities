@@ -37,9 +37,9 @@ import {
 import { formatEventTimeRange, parseEventNotes } from '../lib/eventNotes'
 
 const ROOM_DISPLAY_ORDER = [
-  'Mailroom linen',
+  'Mailroom Storage',
   'Joe west linen',
-  'CVA OGH',
+  'OGH',
   'P1 Storage',
   'SVP',
 ]
