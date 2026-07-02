@@ -1,0 +1,303 @@
+/* iPad-only layout spacing. Applied when html has .ipad-ui (see main.jsx). */
+
+html.ipad-ui {
+  font-size: 17px;
+}
+
+html.ipad-ui body {
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Page shells */
+html.ipad-ui main {
+  padding-left: 2.75rem !important;
+  padding-right: 2.75rem !important;
+  padding-bottom: 7rem !important;
+}
+
+html.ipad-ui main.pt-14,
+html.ipad-ui main.pt-16,
+html.ipad-ui main.pt-20 {
+  padding-top: 5.75rem !important;
+}
+
+html.ipad-ui section.mx-auto {
+  padding-top: 1.75rem !important;
+  padding-bottom: 1.75rem !important;
+}
+
+html.ipad-ui section.mb-6 {
+  margin-bottom: 2.75rem !important;
+}
+
+/* Top bar */
+html.ipad-ui header.fixed.inset-x-0.top-0 {
+  height: 4.5rem;
+}
+
+html.ipad-ui header.fixed.inset-x-0.top-0 .text-\[14px\] {
+  font-size: 1rem !important;
+}
+
+html.ipad-ui header.fixed.inset-x-0.top-0 .text-\[13px\] {
+  font-size: 0.95rem !important;
+}
+
+html.ipad-ui header.fixed.inset-x-0.top-0 .text-\[11px\] {
+  font-size: 0.8rem !important;
+}
+
+/* Bottom navigation */
+html.ipad-ui nav.fixed.inset-x-0.bottom-0 {
+  height: 6rem;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+html.ipad-ui nav.fixed.inset-x-0.bottom-0 a {
+  gap: 0.4rem;
+  padding: 0.65rem 0.35rem;
+}
+
+html.ipad-ui nav.fixed.inset-x-0.bottom-0 svg {
+  width: 1.75rem !important;
+  height: 1.75rem !important;
+}
+
+html.ipad-ui nav.fixed.inset-x-0.bottom-0 span {
+  font-size: 0.72rem !important;
+  margin-top: 0.4rem !important;
+  letter-spacing: 0.07em;
+}
+
+/* Cards, buttons, inputs */
+html.ipad-ui .brutal-card {
+  padding: 1.75rem !important;
+}
+
+html.ipad-ui .brutal-card.p-4 {
+  padding: 1.75rem !important;
+}
+
+html.ipad-ui .brutal-card.p-5,
+html.ipad-ui .brutal-card.p-6,
+html.ipad-ui .brutal-card.p-7,
+html.ipad-ui .brutal-card.p-8 {
+  padding: 2rem !important;
+}
+
+html.ipad-ui .brutal-btn {
+  min-height: 3.1rem;
+  padding-top: 0.85rem !important;
+  padding-bottom: 0.85rem !important;
+  font-size: 0.82rem !important;
+}
+
+html.ipad-ui .brutal-btn.px-2,
+html.ipad-ui .brutal-btn.px-2\.5,
+html.ipad-ui .brutal-btn.px-3 {
+  padding-left: 1rem !important;
+  padding-right: 1rem !important;
+}
+
+html.ipad-ui .brutal-input {
+  min-height: 3.35rem;
+  padding: 1rem 1.15rem !important;
+  font-size: 1.05rem !important;
+}
+
+html.ipad-ui .stamp {
+  padding: 0.35rem 0.85rem !important;
+  font-size: 0.72rem !important;
+}
+
+/* Grids and stacks */
+html.ipad-ui .grid.gap-2 {
+  gap: 1.1rem !important;
+}
+
+html.ipad-ui .grid.gap-3 {
+  gap: 1.45rem !important;
+}
+
+html.ipad-ui .space-y-2 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1.1rem !important;
+}
+
+html.ipad-ui .space-y-3 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1.45rem !important;
+}
+
+html.ipad-ui .flex.gap-2 {
+  gap: 0.85rem !important;
+}
+
+html.ipad-ui .flex.gap-3 {
+  gap: 1.15rem !important;
+}
+
+html.ipad-ui .mb-2 {
+  margin-bottom: 0.85rem !important;
+}
+
+html.ipad-ui .mb-3 {
+  margin-bottom: 1.35rem !important;
+}
+
+html.ipad-ui .mb-4 {
+  margin-bottom: 1.85rem !important;
+}
+
+html.ipad-ui .mb-5 {
+  margin-bottom: 2.35rem !important;
+}
+
+html.ipad-ui .mb-6 {
+  margin-bottom: 2.85rem !important;
+}
+
+html.ipad-ui .pb-3 {
+  padding-bottom: 1.15rem !important;
+}
+
+html.ipad-ui .pb-4 {
+  padding-bottom: 1.5rem !important;
+}
+
+html.ipad-ui .py-2\.5,
+html.ipad-ui .py-3 {
+  padding-top: 0.95rem !important;
+  padding-bottom: 0.95rem !important;
+}
+
+/* Page titles */
+html.ipad-ui h1.text-\[30px\],
+html.ipad-ui h2.text-\[30px\] {
+  font-size: 2.15rem !important;
+  line-height: 1.12 !important;
+}
+
+html.ipad-ui h2.text-\[28px\] {
+  font-size: 2rem !important;
+}
+
+html.ipad-ui h2.text-\[24px\] {
+  font-size: 1.75rem !important;
+}
+
+html.ipad-ui h2.text-\[22px\],
+html.ipad-ui h3.text-\[18px\] {
+  font-size: 1.45rem !important;
+}
+
+html.ipad-ui .text-\[10px\] {
+  font-size: 0.72rem !important;
+}
+
+html.ipad-ui .text-\[11px\] {
+  font-size: 0.78rem !important;
+}
+
+html.ipad-ui .text-\[12px\] {
+  font-size: 0.88rem !important;
+}
+
+html.ipad-ui .text-\[13px\] {
+  font-size: 0.95rem !important;
+}
+
+html.ipad-ui .text-\[14px\] {
+  font-size: 1rem !important;
+}
+
+html.ipad-ui .mono.text-\[44px\],
+html.ipad-ui .mono.text-\[36px\] {
+  font-size: 3rem !important;
+  line-height: 1 !important;
+}
+
+html.ipad-ui .mono.text-\[34px\],
+html.ipad-ui .mono.text-\[30px\] {
+  font-size: 2.5rem !important;
+}
+
+html.ipad-ui .mono.text-\[28px\],
+html.ipad-ui .mono.text-\[24px\] {
+  font-size: 2rem !important;
+}
+
+html.ipad-ui .mono.text-\[20px\] {
+  font-size: 1.65rem !important;
+}
+
+/* Dashboard horizontal room cards */
+html.ipad-ui .flex.snap-x.snap-mandatory.gap-3 {
+  gap: 1.45rem !important;
+  padding-bottom: 1rem !important;
+}
+
+html.ipad-ui .min-w-\[272px\] {
+  min-width: 21rem !important;
+}
+
+html.ipad-ui .min-w-\[340px\] {
+  min-width: 24rem !important;
+}
+
+/* Login */
+html.ipad-ui form.brutal-card {
+  padding: 2.75rem !important;
+}
+
+html.ipad-ui .max-w-\[620px\] {
+  max-width: 42rem !important;
+}
+
+/* Inventory / dashboard section labels */
+html.ipad-ui .inline-block.bg-ink.px-3\.5.py-1\.5 {
+  padding: 0.75rem 1.25rem !important;
+  font-size: 0.85rem !important;
+}
+
+/* Modals */
+html.ipad-ui .fixed.inset-0.z-50 .brutal-card,
+html.ipad-ui .fixed.inset-0.z-\[60\] .brutal-card {
+  padding: 2rem !important;
+}
+
+html.ipad-ui .fixed.inset-0.z-50 .brutal-card.p-5,
+html.ipad-ui .fixed.inset-0.z-\[60\] .brutal-card.p-5 {
+  padding: 2.25rem !important;
+}
+
+/* Admin linen count grid */
+html.ipad-ui .grid.grid-cols-1.gap-2.sm\:grid-cols-2.xl\:grid-cols-3 {
+  gap: 1.25rem !important;
+}
+
+/* Mission summary bar */
+html.ipad-ui .grid.grid-cols-2.gap-3.sm\:grid-cols-5 {
+  gap: 1.25rem !important;
+}
+
+html.ipad-ui .grid.grid-cols-2.gap-3.sm\:grid-cols-5 .mono.text-\[22px\] {
+  font-size: 2rem !important;
+}
+
+/* Page headers with border */
+html.ipad-ui header.mb-5.border-b-\[3px\],
+html.ipad-ui .mb-6.border-b-\[3px\],
+html.ipad-ui .mb-4.border-b-\[3px\] {
+  padding-bottom: 1.35rem !important;
+  margin-bottom: 2rem !important;
+}
+
+/* Rack count rows */
+html.ipad-ui .border-2.border-ink.bg-cream.p-2\.5 {
+  padding: 1rem 1.15rem !important;
+}
+
+html.ipad-ui .mb-1\.5.border-b.border-stone.py-2 {
+  padding-top: 0.85rem !important;
+  padding-bottom: 0.85rem !important;
+  margin-bottom: 0.65rem !important;
+}

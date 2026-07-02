@@ -2,6 +2,34 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
+import './ipad.css'
+import './phone.css'
+
+function isIpadDevice() {
+  const ua = navigator.userAgent || ''
+  if (/iPad/i.test(ua)) return true
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1
+}
+
+function syncDeviceUiClasses() {
+  const width = window.innerWidth
+  const html = document.documentElement
+
+  html.classList.remove('ipad-ui', 'phone-ui')
+
+  if (isIpadDevice() && width >= 744 && width <= 1366) {
+    html.classList.add('ipad-ui')
+    return
+  }
+
+  if (width < 744) {
+    html.classList.add('phone-ui')
+  }
+}
+
+syncDeviceUiClasses()
+window.addEventListener('resize', syncDeviceUiClasses)
+window.addEventListener('orientationchange', syncDeviceUiClasses)
 
 function renderBootError(message) {
   const root = document.getElementById('root')
