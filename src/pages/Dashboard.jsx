@@ -30,7 +30,6 @@ import {
   getActiveLaundryLoads,
   getLocations,
   getNextPickupEvents,
-  getRecentLogEntries,
   getStorageRooms,
   updateLaundryLoadStatus,
 } from '../lib/queries'
@@ -88,7 +87,6 @@ function StaffDashboard({ user, profile }) {
   const [laundryLoading, setLaundryLoading] = useState(true)
   const [laundryError, setLaundryError] = useState('')
   const [showNewLoadModal, setShowNewLoadModal] = useState(false)
-  const [recentActivity, setRecentActivity] = useState([])
   const [qrRoom, setQrRoom] = useState(null)
   const roomsRefetchTimerRef = useRef(null)
 
@@ -135,14 +133,12 @@ function StaffDashboard({ user, profile }) {
   const fetchStaticPanels = async () => {
     try {
       setPickupError('')
-      const [shift, pickupData, activity] = await Promise.all([
+      const [shift, pickupData] = await Promise.all([
         getActiveShiftNote(),
         getNextPickupEvents(),
-        getRecentLogEntries(user.id, 8),
       ])
       setShiftNote(shift)
       setNextEvents(pickupData)
-      setRecentActivity(activity)
     } catch (error) {
       setPickupError(error.message)
     }
@@ -213,14 +209,9 @@ function StaffDashboard({ user, profile }) {
         ) : !rooms.length ? (
           <EmptyState message="No storage rooms found. Re-run schema.sql seed data." />
         ) : (
-          <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1">
+          <div className="grid grid-cols-2 gap-3">
             {sortRoomsByDisplayOrder(rooms).map((room) => (
-              <StorageCard
-                key={room.id}
-                room={room}
-                onShowQr={() => setQrRoom(room)}
-                className="min-w-[272px] snap-start sm:min-w-[340px]"
-              />
+              <StorageCard key={room.id} room={room} onShowQr={() => setQrRoom(room)} />
             ))}
           </div>
         )}
@@ -245,32 +236,6 @@ function StaffDashboard({ user, profile }) {
           }}
         />
       </section>
-
-      <LabeledSection label="Recent Activity">
-        <div>
-          {recentActivity.map((entry) => (
-            <div key={entry.id} className="flex items-center gap-3 border-b-[1.5px] border-stone py-2.5">
-              <span className="mono text-[11px] text-[#6B6B6B]">
-                {formatDistanceToNowStrict(parseISO(entry.created_at), { addSuffix: true })}
-              </span>
-              <span
-                className={`stamp ${entry.action_type?.includes('restock')
-                    ? 'stamp-blue'
-                    : entry.action_type?.includes('pull')
-                      ? 'stamp-amber'
-                      : 'stamp-ink'
-                  }`}
-              >
-                {entry.action_type || 'audit'}
-              </span>
-              <p className="text-[13px] font-semibold">{entry.items?.label || entry.items?.name || 'Item'}</p>
-              <p className="mono text-[13px] font-bold">{entry.quantity}</p>
-              <p className="text-[12px] text-[#6B6B6B]">{entry.locations?.name}</p>
-            </div>
-          ))}
-          <p className="mt-2 text-right text-[12px] font-bold uppercase text-primary">View all →</p>
-        </div>
-      </LabeledSection>
 
       {qrRoom ? <QRModal room={qrRoom} onClose={() => setQrRoom(null)} /> : null}
       <NewLoadModal
@@ -523,7 +488,7 @@ function StorageCard({ room, onShowQr, admin = false, infoOnly = false, classNam
         </button>
       </div>
       <p className="mono text-[44px] font-bold leading-none">{room.total_bundles}</p>
-      <p className="mb-3 text-[9px] uppercase tracking-[0.08em] text-[#6B6B6B]">Bundles</p>
+      <p className="mb-3 text-[9px] uppercase tracking-[0.08em] text-[#6B6B6B]">Items</p>
       <div className="mb-2 border-t-[1.5px] border-stone bg-cream px-2.5 py-1.5">
         <p className="mono truncate text-[11px]">
           {room.item_breakdown?.length
@@ -737,9 +702,9 @@ function Metric({ value, label, valueClass = 'text-white' }) {
 
 function StorageSkeleton() {
   return (
-    <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1">
-      {[1, 2, 3].map((row) => (
-        <SkeletonStorageCard key={row} className="min-w-[272px] snap-start sm:min-w-[340px]" />
+    <div className="grid grid-cols-2 gap-3">
+      {[1, 2, 3, 4].map((row) => (
+        <SkeletonStorageCard key={row} />
       ))}
     </div>
   )

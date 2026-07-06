@@ -74,13 +74,13 @@ export async function getProfile(userId) {
   const baseProfile = profileData
     ? { ...profileData, role: effectiveRole }
     : {
-        id: userId,
-        full_name: 'Staff User',
-        role: effectiveRole,
-        location_access: null,
-        is_active: true,
-        created_at: null,
-      }
+      id: userId,
+      full_name: 'Staff User',
+      role: effectiveRole,
+      location_access: null,
+      is_active: true,
+      created_at: null,
+    }
 
   return {
     ...baseProfile,
@@ -364,7 +364,7 @@ export async function getShelvesByRoom(locationId) {
 
     let { data: shelves, error: shelvesError } = await withTimeout(shelvesQuery.eq('is_active', true))
     if (shelvesError && /is_active|column/.test(shelvesError.message || '')) {
-      ;({ data: shelves, error: shelvesError } = await withTimeout(shelvesQuery))
+      ; ({ data: shelves, error: shelvesError } = await withTimeout(shelvesQuery))
     }
     if (shelvesError) throw shelvesError
 
@@ -513,10 +513,10 @@ export async function getAdminRoomRacks(locationId) {
   try {
     let { data, error } = await withTimeout(baseQuery().eq('is_active', true))
     if (error && /is_active|column/.test(error.message || '')) {
-      ;({ data, error } = await withTimeout(baseQuery()))
+      ; ({ data, error } = await withTimeout(baseQuery()))
     }
     if (error && /shelf_items|relationship/.test(error.message || '')) {
-      ;({ data, error } = await withTimeout(
+      ; ({ data, error } = await withTimeout(
         supabase
           .from('shelves')
           .select('id,name,qr_slug,created_at,balances(current_balance,item_id)')
@@ -677,7 +677,7 @@ export async function deleteRack({ shelfId }) {
     if (shelfUpdateError) throw shelfUpdateError
 
     if (shelf.location_id) {
-      void syncLocationLinenTotalsFromBalances(shelf.location_id).catch(() => {})
+      void syncLocationLinenTotalsFromBalances(shelf.location_id).catch(() => { })
     }
     clearStorageRoomsCache()
     await getActiveShelfIds(true)
@@ -774,7 +774,7 @@ export async function adjustShelfItemCount({
         staff_name: staffName || null,
         notes: 'rack_count_adjustment',
       }),
-    ).catch(() => {})
+    ).catch(() => { })
 
     const totalColumn = resolveLocationTotalColumn(itemName, itemLabel)
     if (totalColumn && locationId) {
@@ -807,7 +807,7 @@ export async function adjustShelfItemCount({
           baseTotals[totalColumn] = Math.max(0, appliedDelta)
           await withTimeout(supabase.from('location_linen_totals').insert(baseTotals))
         })
-        .catch(() => {})
+        .catch(() => { })
     }
 
     clearStorageRoomsCache()

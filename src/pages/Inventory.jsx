@@ -530,7 +530,7 @@ export default function Inventory() {
                       <p className="text-[15px] font-extrabold uppercase leading-tight">{room.name}</p>
                     </div>
                     <p className="mono text-[36px] font-bold leading-none">{Number(room.total_bundles || 0)}</p>
-                    <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Bundles</p>
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Items</p>
                     <p className="mt-2 text-[10px] text-[#6B6B6B]">
                       Last updated: {formatLastUpdated(room.last_count_time)}
                     </p>

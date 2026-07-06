@@ -146,7 +146,7 @@ export default function AdminLinenCount() {
                   />
                 </div>
                 <p className="mono text-[30px] font-bold">{stats.total}</p>
-                <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Bundles</p>
+                <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Items</p>
                 <div className="mt-2 border-t-[1.5px] border-[#E8E4DC] pt-2">
                   <p className="mono text-[11px] font-bold text-[#6B6B6B]">
                     LAST COUNT UPDATE:{' '}
