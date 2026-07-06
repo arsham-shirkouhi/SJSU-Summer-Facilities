@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { format } from 'date-fns'
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -6,7 +7,6 @@ import {
   Camera,
   ChevronRight,
   Layers,
-  Minus,
   Package2,
   Pencil,
   Plus,
@@ -30,6 +30,7 @@ import {
   deleteRack,
   getAdminRoomRacks,
   getItems,
+  getRackItems,
   getLocationById,
   getLocations,
   getShelvesByRoom,
@@ -39,6 +40,22 @@ import {
 } from '../lib/queries'
 
 const ROOM_ORDER = ['Mailroom Storage', 'Joe west linen', 'OGH', 'P1 Storage', 'SVP']
+
+const formatLastUpdated = (iso) => {
+  if (!iso) return 'Never'
+  try {
+    return format(new Date(iso), 'MMM d, yyyy h:mm a')
+  } catch {
+    return 'Unknown'
+  }
+}
+
+const latestUpdatedAt = (rows) =>
+  (rows || []).reduce((latest, row) => {
+    if (!row?.updated_at) return latest
+    if (!latest || new Date(row.updated_at) > new Date(latest)) return row.updated_at
+    return latest
+  }, null)
 
 const orderedRooms = (rooms) =>
   [...rooms].sort((a, b) => {
@@ -64,8 +81,11 @@ export default function Inventory() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
 
-  const [selectedIncrement, setSelectedIncrement] = useState(SETTINGS.inventory.countIncrements[1] || 1)
-  const [submittingKey, setSubmittingKey] = useState('')
+  const [activeCountItemId, setActiveCountItemId] = useState(null)
+  const [countInput, setCountInput] = useState('')
+  const [savedBaseline, setSavedBaseline] = useState(0)
+  const [savingCount, setSavingCount] = useState(false)
+  const [savedConfirmation, setSavedConfirmation] = useState(null)
   const [showQrScanner, setShowQrScanner] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
   const [adminRacks, setAdminRacks] = useState([])
@@ -135,6 +155,7 @@ export default function Inventory() {
             {
               id: balance.id,
               current_balance: Number(balance.current_balance || 0),
+              updated_at: balance.updated_at || null,
             },
           ]),
         )
@@ -153,6 +174,7 @@ export default function Inventory() {
           return {
             ...item,
             current_balance: Number(balance?.current_balance || 0),
+            updated_at: balance?.updated_at || null,
           }
         })
 
@@ -160,6 +182,7 @@ export default function Inventory() {
           id: shelf.id,
           name: shelf.name,
           rows,
+          last_updated_at: latestUpdatedAt(rows),
         }
       })
 
@@ -187,7 +210,7 @@ export default function Inventory() {
     }
     try {
       setLoadingAdminRacks(true)
-      const [racks, items] = await Promise.all([getAdminRoomRacks(roomId), getItems()])
+      const [racks, items] = await Promise.all([getAdminRoomRacks(roomId), getRackItems()])
       setAdminRacks(racks || [])
       setRackItems(items || [])
     } catch (loadError) {
@@ -212,49 +235,99 @@ export default function Inventory() {
     [roomDetail, shelfId],
   )
 
-  const adjustCount = async ({ shelf, row, change }) => {
-    if (!roomDetail || !shelf || !row) return
+  const activeCountRow = useMemo(
+    () => selectedShelf?.rows?.find((row) => row.item_id === activeCountItemId) || null,
+    [selectedShelf, activeCountItemId],
+  )
 
-    const actionKey = `${shelf.id}-${row.item_id}`
-    setSubmittingKey(actionKey)
+  useEffect(() => {
+    setActiveCountItemId(null)
+    setSavedConfirmation(null)
+  }, [shelfId])
+
+  const openItemCounter = (row) => {
+    const current = Number(row.current_balance || 0)
+    setSavedConfirmation(null)
+    setActiveCountItemId(row.item_id)
+    setCountInput(String(current))
+    setSavedBaseline(current)
+  }
+
+  const closeItemCounter = () => {
+    setActiveCountItemId(null)
+    setSavedConfirmation(null)
+  }
+
+  const handleSaveCount = async () => {
+    if (!selectedShelf || !activeCountRow) return
+
+    const nextCount = Math.max(0, Number(countInput) || 0)
+    const change = nextCount - savedBaseline
+    if (change === 0) {
+      closeItemCounter()
+      return
+    }
+
+    setSavingCount(true)
     try {
       const result = await adjustShelfItemCount({
-        shelfId: shelf.id,
+        shelfId: selectedShelf.id,
         locationId: roomDetail.roomId,
-        itemId: row.item_id,
+        itemId: activeCountRow.item_id,
         delta: change,
         staffId: user?.id,
         staffName: profile?.full_name || user?.email || 'Staff',
-        itemName: row.item_name,
-        itemLabel: row.item_label,
+        itemName: activeCountRow.item_name,
+        itemLabel: activeCountRow.item_label,
       })
 
       if (!result.applied_delta) {
-        toast.error('Nothing to remove. Count is already zero.')
+        toast.error('Count is already zero.')
+        return
       }
+
+      const updatedAt = result.updated_at || new Date().toISOString()
 
       setRoomDetail((current) => {
         if (!current) return current
         return {
           ...current,
           shelves: current.shelves.map((shelfEntry) =>
-            shelfEntry.id !== shelf.id
+            shelfEntry.id !== selectedShelf.id
               ? shelfEntry
               : {
                   ...shelfEntry,
                   rows: shelfEntry.rows.map((rowEntry) =>
-                    rowEntry.item_id === row.item_id
-                      ? { ...rowEntry, current_balance: result.current_balance }
+                    rowEntry.item_id === activeCountRow.item_id
+                      ? {
+                          ...rowEntry,
+                          current_balance: result.current_balance,
+                          updated_at: updatedAt,
+                        }
                       : rowEntry,
+                  ),
+                  last_updated_at: latestUpdatedAt(
+                    shelfEntry.rows.map((rowEntry) =>
+                      rowEntry.item_id === activeCountRow.item_id
+                        ? { ...rowEntry, updated_at: updatedAt }
+                        : rowEntry,
+                    ),
                   ),
                 },
           ),
         }
       })
+
+      setSavedConfirmation({
+        itemLabel: activeCountRow.item_label,
+        count: result.current_balance,
+        updatedAt,
+      })
+      toast.success(`Updated ${formatLastUpdated(updatedAt)}`)
     } catch (adjustError) {
-      toast.error(adjustError.message || 'Failed to update tally')
+      toast.error(adjustError.message || 'Failed to save count')
     } finally {
-      setSubmittingKey('')
+      setSavingCount(false)
     }
   }
 
@@ -457,8 +530,11 @@ export default function Inventory() {
                       <p className="text-[15px] font-extrabold uppercase leading-tight">{room.name}</p>
                     </div>
                     <p className="mono text-[36px] font-bold leading-none">{Number(room.total_bundles || 0)}</p>
-                    <p className="mb-3 text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Bundles</p>
-                    <div className="flex items-center justify-end text-[11px] font-bold uppercase text-primary">
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Bundles</p>
+                    <p className="mt-2 text-[10px] text-[#6B6B6B]">
+                      Last updated: {formatLastUpdated(room.last_count_time)}
+                    </p>
+                    <div className="mt-2 flex items-center justify-end text-[11px] font-bold uppercase text-primary">
                       Open Room
                       <ChevronRight size={14} />
                     </div>
@@ -626,6 +702,9 @@ export default function Inventory() {
                     <h2 className="text-[22px] font-extrabold uppercase leading-tight">{shelf.name}</h2>
                     <p className="mono mt-1 text-[24px] font-bold">{total}</p>
                     <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Total Count</p>
+                    <p className="mt-2 text-[10px] text-[#6B6B6B]">
+                      Last updated: {formatLastUpdated(shelf.last_updated_at)}
+                    </p>
                     <div className="mt-2 flex items-center justify-end text-[11px] font-bold uppercase text-primary">
                       Start Count
                       <ChevronRight size={14} />
@@ -668,28 +747,12 @@ export default function Inventory() {
         {renderHeader(
           'Rack Counter',
           `${roomDetail?.roomName || 'Room'} · ${selectedShelf?.name || 'Rack'}`,
-          'Choose increment, then add/remove bundles',
-          () => openRoom(roomId),
-          'Back to Racks',
+          activeCountRow
+            ? `Enter total for ${activeCountRow.item_label}`
+            : 'Select an item to count',
+          activeCountRow ? closeItemCounter : () => openRoom(roomId),
+          activeCountRow ? 'Back to Items' : 'Back to Racks',
         )}
-
-        <section className="mb-4">
-          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.07em]">Count Increment</p>
-          <div className="flex flex-wrap gap-2">
-            {SETTINGS.inventory.countIncrements.map((increment) => (
-              <button
-                key={increment}
-                type="button"
-                onClick={() => setSelectedIncrement(increment)}
-                className={`brutal-btn px-3 py-1.5 text-[11px] ${
-                  selectedIncrement === increment ? 'bg-primary text-white' : 'bg-white'
-                }`}
-              >
-                {increment}
-              </button>
-            ))}
-          </div>
-        </section>
 
         {detailError ? (
           <ErrorPanel message={detailError} onRetry={fetchRoomDetail} />
@@ -699,53 +762,94 @@ export default function Inventory() {
           <div className="brutal-card bg-white p-4">
             <p className="text-[13px] font-semibold">Rack not found.</p>
           </div>
-        ) : (
+        ) : !selectedShelf.rows.length ? (
+          <div className="brutal-card bg-white p-4">
+            <p className="text-[12px] text-[#6B6B6B]">
+              No items assigned to this rack yet. An admin can assign items with Manage Racks.
+            </p>
+          </div>
+        ) : activeCountRow ? (
           <section className="brutal-card bg-white p-4 sm:p-5">
-            <div className="mb-3 border-b-2 border-stone pb-2">
-              <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">Rack</p>
-              <h2 className="text-[20px] font-extrabold uppercase">{selectedShelf.name}</h2>
-            </div>
-
-            <div className="space-y-2">
-              {!selectedShelf.rows.length ? (
-                <p className="text-[12px] text-[#6B6B6B]">
-                  No items assigned to this rack yet. An admin can assign items with Manage Racks.
+            {savedConfirmation ? (
+              <div className="text-center">
+                <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-primary">Saved</p>
+                <h2 className="mt-1 text-[20px] font-extrabold uppercase">{savedConfirmation.itemLabel}</h2>
+                <p className="mono mt-3 text-[42px] font-bold leading-none">{savedConfirmation.count}</p>
+                <p className="mt-4 text-[12px] font-bold uppercase text-[#6B6B6B]">Updated</p>
+                <p className="mono mt-1 text-[14px] font-bold">
+                  {formatLastUpdated(savedConfirmation.updatedAt)}
                 </p>
-              ) : null}
-              {selectedShelf.rows.map((row) => {
-                const rowKey = `${selectedShelf.id}-${row.item_id}`
-                const pending = submittingKey === rowKey
-                return (
-                  <div key={rowKey} className="border-2 border-ink bg-cream p-2.5">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <p className="text-[12px] font-bold uppercase">{row.item_label}</p>
-                      <p className="mono text-[20px] font-bold">{row.current_balance}</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        disabled={pending}
-                        className="brutal-btn flex items-center justify-center gap-1 bg-white px-2 py-2 text-[11px]"
-                        onClick={() => adjustCount({ shelf: selectedShelf, row, change: -selectedIncrement })}
-                      >
-                        <Minus size={12} />
-                        Remove {selectedIncrement}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={pending}
-                        className="brutal-btn flex items-center justify-center gap-1 bg-primary px-2 py-2 text-[11px] text-white"
-                        onClick={() => adjustCount({ shelf: selectedShelf, row, change: selectedIncrement })}
-                      >
-                        <Plus size={12} />
-                        Add {selectedIncrement}
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
+                <button
+                  type="button"
+                  className="brutal-btn mt-6 w-full bg-primary py-3 text-[13px] text-white"
+                  onClick={closeItemCounter}
+                >
+                  Back to Items →
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="mb-5 text-center">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">
+                    Current Count: {savedBaseline}
+                  </p>
+                  <p className="mt-1 text-[10px] text-[#6B6B6B]">
+                    Last updated: {formatLastUpdated(activeCountRow.updated_at)}
+                  </p>
+                  <input
+                    className="brutal-input mx-auto mt-3 w-full max-w-[240px] text-center text-[36px] font-bold"
+                    inputMode="numeric"
+                    placeholder="0"
+                    value={countInput}
+                    disabled={savingCount}
+                    autoFocus
+                    onChange={(event) =>
+                      setCountInput(event.target.value.replace(/\D/g, '').slice(0, 5))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        handleSaveCount()
+                      }
+                    }}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={savingCount}
+                  className="brutal-btn w-full bg-primary py-3 text-[13px] text-white disabled:opacity-60"
+                  onClick={handleSaveCount}
+                >
+                  {savingCount ? 'Saving...' : 'Save Count →'}
+                </button>
+              </>
+            )}
           </section>
+        ) : (
+          <>
+            {selectedShelf.last_updated_at ? (
+              <p className="mb-3 text-[11px] text-[#6B6B6B]">
+                Rack last updated: {formatLastUpdated(selectedShelf.last_updated_at)}
+              </p>
+            ) : null}
+            <section className="grid grid-cols-2 gap-3">
+              {selectedShelf.rows.map((row) => (
+                <button
+                  key={row.item_id}
+                  type="button"
+                  onClick={() => openItemCounter(row)}
+                  className="brutal-card bg-white p-4 text-left transition-transform hover:-translate-y-0.5"
+                >
+                  <p className="text-[12px] font-extrabold uppercase leading-tight">{row.item_label}</p>
+                  <p className="mono mt-2 text-[28px] font-bold leading-none">{row.current_balance}</p>
+                  <p className="mt-2 text-[9px] uppercase tracking-[0.06em] text-[#6B6B6B]">
+                    Updated {formatLastUpdated(row.updated_at)}
+                  </p>
+                </button>
+              ))}
+            </section>
+          </>
         )}
       </main>
       <BottomNav role={profile?.role} />

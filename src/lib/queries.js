@@ -347,6 +347,12 @@ export async function getItems() {
   }
 }
 
+export async function getRackItems() {
+  const allItems = await getItems()
+  const byName = Object.fromEntries(allItems.map((item) => [item.name, item]))
+  return SETTINGS.rackItems.map((config) => byName[config.key]).filter(Boolean)
+}
+
 export async function getShelvesByRoom(locationId) {
   try {
     let shelvesQuery = supabase
@@ -382,7 +388,7 @@ export async function getShelvesByRoom(locationId) {
       withTimeout(
         supabase
           .from('balances')
-          .select('id,shelf_id,current_balance,item_id,items(id,name,label)')
+          .select('id,shelf_id,current_balance,updated_at,item_id,items(id,name,label)')
           .eq('location_id', locationId),
       ),
     ])
@@ -682,10 +688,11 @@ export async function deleteRack({ shelfId }) {
 
 const resolveLocationTotalColumn = (itemName, itemLabel) => {
   const value = `${itemName || ''} ${itemLabel || ''}`.toLowerCase()
+  if (value.includes('pillow case') || value.includes('pillowcase')) return 'pillow_case'
   if (value.includes('pillow')) return 'pillow_case'
   if (value.includes('hand') || value.includes('face')) return 'face_hand_towel'
   if (value.includes('body') || value.includes('bath')) return 'body_towel'
-  if (value.includes('sheet') || value.includes('linen')) return 'linen'
+  if (value.includes('sheet') || value.includes('blanket') || value.includes('linen')) return 'linen'
   return null
 }
 
@@ -731,12 +738,13 @@ export async function adjustShelfItemCount({
             updated_at: new Date().toISOString(),
           })
           .eq('id', currentBalanceRow.id)
-          .select('id,current_balance')
+          .select('id,current_balance,updated_at')
           .single(),
       )
       if (error) throw error
       updatedBalanceRow = data
     } else {
+      const now = new Date().toISOString()
       const { data, error } = await withTimeout(
         supabase
           .from('balances')
@@ -745,8 +753,9 @@ export async function adjustShelfItemCount({
             location_id: locationId,
             item_id: itemId,
             current_balance: nextBalance,
+            updated_at: now,
           })
-          .select('id,current_balance')
+          .select('id,current_balance,updated_at')
           .single(),
       )
       if (error) throw error
@@ -803,7 +812,11 @@ export async function adjustShelfItemCount({
 
     clearStorageRoomsCache()
 
-    return { current_balance: Number(updatedBalanceRow?.current_balance || nextBalance), applied_delta: appliedDelta }
+    return {
+      current_balance: Number(updatedBalanceRow?.current_balance || nextBalance),
+      applied_delta: appliedDelta,
+      updated_at: updatedBalanceRow?.updated_at || new Date().toISOString(),
+    }
   } catch (error) {
     throw error
   }
@@ -1470,6 +1483,127 @@ export async function getPickupMissionGroup(groupId) {
     )
     if (error) throw error
     return data
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function getCompletedPickupMission(missionId) {
+  try {
+    const { data: mission, error } = await withTimeout(
+      supabase
+        .from('pickup_missions')
+        .select('id,status,created_at,completed_at,created_by,completed_by')
+        .eq('id', missionId)
+        .eq('status', 'completed')
+        .maybeSingle(),
+    )
+    if (error) throw error
+    if (!mission) return null
+
+    const { data: groups, error: groupsError } = await withTimeout(
+      supabase
+        .from('pickup_mission_groups')
+        .select('id,mission_id,name,face_towels,body_towels,top_sheets,pillow_cases,created_at,updated_at')
+        .eq('mission_id', mission.id)
+        .order('created_at', { ascending: true }),
+    )
+    if (groupsError) throw groupsError
+
+    return { ...mission, groups: groups || [] }
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function updatePickupMissionCompletedDate(missionId, completedDate) {
+  try {
+    const dateValue = String(completedDate || '').trim()
+    if (!dateValue) throw new Error('Completed date is required')
+
+    const completedAt = new Date(`${dateValue}T12:00:00`).toISOString()
+
+    const { data, error } = await withTimeout(
+      supabase
+        .from('pickup_missions')
+        .update({ completed_at: completedAt })
+        .eq('id', missionId)
+        .eq('status', 'completed')
+        .select('id,status,created_at,completed_at,created_by,completed_by')
+        .single(),
+    )
+    if (error) throw error
+    return data
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function deletePickupMission(missionId) {
+  try {
+    const { error } = await withTimeout(
+      supabase.from('pickup_missions').delete().eq('id', missionId).eq('status', 'completed'),
+    )
+    if (error) throw error
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function createHistoricalPickupMission({ completedDate, groups, userId }) {
+  try {
+    const dateValue = String(completedDate || '').trim()
+    if (!dateValue) throw new Error('Completed date is required')
+
+    const normalizedGroups = (groups || [])
+      .map((group) => ({
+        name: String(group.name || '').trim(),
+        face_towels: Math.max(0, Number(group.face_towels) || 0),
+        body_towels: Math.max(0, Number(group.body_towels) || 0),
+        top_sheets: Math.max(0, Number(group.top_sheets) || 0),
+        pillow_cases: Math.max(0, Number(group.pillow_cases) || 0),
+      }))
+      .filter((group) => group.name)
+
+    if (!normalizedGroups.length) {
+      throw new Error('Add at least one group with a name')
+    }
+
+    const completedAt = new Date(`${dateValue}T12:00:00`).toISOString()
+
+    const { data: mission, error } = await withTimeout(
+      supabase
+        .from('pickup_missions')
+        .insert({
+          status: 'completed',
+          created_by: userId || null,
+          completed_by: userId || null,
+          created_at: completedAt,
+          completed_at: completedAt,
+        })
+        .select('id,status,created_at,completed_at,created_by,completed_by')
+        .single(),
+    )
+    if (error) throw error
+
+    const groupRows = normalizedGroups.map((group) => ({
+      mission_id: mission.id,
+      name: group.name,
+      face_towels: group.face_towels,
+      body_towels: group.body_towels,
+      top_sheets: group.top_sheets,
+      pillow_cases: group.pillow_cases,
+      created_by: userId || null,
+      created_at: completedAt,
+      updated_at: completedAt,
+    }))
+
+    const { error: groupsError } = await withTimeout(
+      supabase.from('pickup_mission_groups').insert(groupRows),
+    )
+    if (groupsError) throw groupsError
+
+    return { ...mission, groups: groupRows }
   } catch (error) {
     throw error
   }

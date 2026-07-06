@@ -1074,12 +1074,12 @@ from locations;
 
 -- seed items
 insert into items (name, label) values
-('twin_sheets', 'Twin Bed Sheets'),
-('pillowcases', 'Pillowcases'),
-('bath_towels', 'Bath Towels'),
-('hand_towels', 'Hand Towels'),
+('pillows', 'Pillows'),
+('blankets', 'Blankets'),
+('pillowcases', 'Pillow Cases'),
+('top_sheets', 'Top Sheets'),
 ('face_towels', 'Face Towels'),
-('blankets', 'Blankets');
+('body_towels', 'Body Towels');
 
 -- seed starter racks for Mailroom (other rooms start empty; add racks later)
 insert into shelves (location_id, name, qr_slug)
@@ -1100,9 +1100,8 @@ join locations l on l.id = s.location_id
 join (
   values
     ('mailroom-rack-a', 'face_towels', 1),
-    ('mailroom-rack-a', 'hand_towels', 2),
-    ('mailroom-rack-a', 'bath_towels', 3),
-    ('mailroom-rack-b', 'twin_sheets', 1),
+    ('mailroom-rack-a', 'body_towels', 2),
+    ('mailroom-rack-b', 'top_sheets', 1),
     ('mailroom-rack-b', 'pillowcases', 2)
 ) as cfg(qr_slug, item_name, sort_order)
   on cfg.qr_slug = s.qr_slug

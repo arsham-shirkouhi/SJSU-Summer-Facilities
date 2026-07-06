@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext'
 import { SETTINGS } from '../config/settings'
 import {
   getActivePickupMission,
+  getCompletedPickupMission,
   getPickupMissionGroup,
   savePickupMissionGroup,
   startPickupMission,
@@ -21,12 +22,13 @@ const EMPTY_COUNTS = MISSION_ITEMS.reduce(
   { name: '' },
 )
 
-export default function MissionGroupForm() {
-  const { groupId } = useParams()
+export default function MissionGroupForm({ isHistory = false }) {
+  const { groupId, missionId: historyMissionId } = useParams()
   const isEdit = Boolean(groupId)
   const navigate = useNavigate()
   const { user, profile } = useAuth()
   const navRole = String(profile?.role || '').trim().toLowerCase() === 'admin' ? 'admin' : 'staff'
+  const isAdmin = navRole === 'admin'
 
   const [missionId, setMissionId] = useState(null)
   const [form, setForm] = useState(EMPTY_COUNTS)
@@ -37,6 +39,41 @@ export default function MissionGroupForm() {
     const load = async () => {
       try {
         setLoading(true)
+
+        if (isHistory) {
+          if (!isAdmin) {
+            toast.error('Only admins can edit history')
+            navigate('/mission', { replace: true, state: { showHistory: true } })
+            return
+          }
+
+          const mission = await getCompletedPickupMission(historyMissionId)
+          if (!mission) {
+            toast.error('History entry not found')
+            navigate('/mission', { replace: true, state: { showHistory: true } })
+            return
+          }
+
+          setMissionId(mission.id)
+
+          if (isEdit) {
+            const group = await getPickupMissionGroup(groupId)
+            if (!group || group.mission_id !== mission.id) {
+              toast.error('Group not found in this history entry')
+              navigate('/mission', { replace: true, state: { showHistory: true } })
+              return
+            }
+            setForm({
+              name: group.name,
+              face_towels: String(group.face_towels ?? ''),
+              body_towels: String(group.body_towels ?? ''),
+              top_sheets: String(group.top_sheets ?? ''),
+              pillow_cases: String(group.pillow_cases ?? ''),
+            })
+          }
+          return
+        }
+
         let mission = await getActivePickupMission()
 
         if (!mission) {
@@ -62,14 +99,14 @@ export default function MissionGroupForm() {
         }
       } catch (error) {
         toast.error(error.message || 'Failed to load group form')
-        navigate('/mission', { replace: true })
+        navigate('/mission', { replace: true, state: isHistory ? { showHistory: true } : undefined })
       } finally {
         setLoading(false)
       }
     }
 
     load()
-  }, [groupId, isEdit, navigate, user?.id])
+  }, [groupId, historyMissionId, isAdmin, isEdit, isHistory, navigate, user?.id])
 
   if (!user) return <Navigate to="/login" replace />
 
@@ -86,7 +123,7 @@ export default function MissionGroupForm() {
       return
     }
     if (!missionId) {
-      toast.error('No active mission')
+      toast.error(isHistory ? 'History entry not found' : 'No active mission')
       return
     }
 
@@ -103,7 +140,7 @@ export default function MissionGroupForm() {
         userId: user.id,
       })
       toast.success(isEdit ? 'Group updated' : 'Group saved')
-      navigate('/mission')
+      navigate('/mission', { state: isHistory ? { showHistory: true } : undefined })
     } catch (error) {
       toast.error(error.message || 'Failed to save group')
     } finally {
@@ -111,16 +148,31 @@ export default function MissionGroupForm() {
     }
   }
 
+  const backLink = isHistory ? (
+    <Link
+      to="/mission"
+      state={{ showHistory: true }}
+      className="mb-3 inline-flex items-center gap-1 text-[11px] font-bold uppercase text-primary"
+    >
+      <ArrowLeft size={14} />
+      Back to History
+    </Link>
+  ) : (
+    <Link to="/mission" className="mb-3 inline-flex items-center gap-1 text-[11px] font-bold uppercase text-primary">
+      <ArrowLeft size={14} />
+      Back to Mission
+    </Link>
+  )
+
   return (
     <div className="min-h-screen bg-cream">
       <TopBar />
       <main className="mx-auto min-h-screen w-full max-w-[720px] bg-cream px-4 pb-20 pt-16 sm:px-6 md:px-8">
         <div className="mb-6 border-b-[3px] border-ink pb-4">
-          <Link to="/mission" className="mb-3 inline-flex items-center gap-1 text-[11px] font-bold uppercase text-primary">
-            <ArrowLeft size={14} />
-            Back to Mission
-          </Link>
-          <p className="text-[11px] uppercase tracking-[0.08em] text-[#6B6B6B]">Weekly Pickup</p>
+          {backLink}
+          <p className="text-[11px] uppercase tracking-[0.08em] text-[#6B6B6B]">
+            {isHistory ? 'Mission History' : 'Weekly Pickup'}
+          </p>
           <h2 className="text-[28px] font-extrabold">{isEdit ? 'Edit Group' : 'Add Group'}</h2>
         </div>
 

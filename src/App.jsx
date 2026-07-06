@@ -101,6 +101,22 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/mission/history/:missionId/groups/new"
+        element={
+          <ProtectedRoute>
+            <MissionGroupForm isHistory />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/mission/history/:missionId/groups/:groupId/edit"
+        element={
+          <ProtectedRoute>
+            <MissionGroupForm isHistory />
+          </ProtectedRoute>
+        }
+      />
     </Routes>
   )
 }

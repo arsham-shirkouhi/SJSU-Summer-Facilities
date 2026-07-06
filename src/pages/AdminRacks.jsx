@@ -10,7 +10,7 @@ import {
   createRack,
   deleteRack,
   getAdminRoomRacks,
-  getItems,
+  getRackItems,
   getStorageRoomsWithRackCounts,
   updateRack,
 } from '../lib/queries'
@@ -59,7 +59,7 @@ export default function AdminRacks() {
   const loadRooms = async () => {
     try {
       setLoadingRooms(true)
-      const [roomRows, itemRows] = await Promise.all([getStorageRoomsWithRackCounts(), getItems()])
+      const [roomRows, itemRows] = await Promise.all([getStorageRoomsWithRackCounts(), getRackItems()])
       setRooms(roomRows || [])
       setItems(itemRows || [])
     } catch (error) {

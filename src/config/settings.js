@@ -16,18 +16,30 @@ export const SETTINGS = {
     lowThreshold: 15,
     criticalThreshold: 5,
     countIncrements: [1, 5, 10, 20, 50],
+    stackIncrements: [5, 10, 20],
   },
 
   // Storage rooms
   storageRooms: ['Storage A', 'Storage B', 'Storage C'],
 
-  // Linen item types
+  // Linen item types (inventory / transfers)
   itemTypes: [
-    { key: 'twin_sheets', label: 'Twin Bed Sheets' },
-    { key: 'pillowcases', label: 'Pillowcases' },
-    { key: 'bath_towels', label: 'Bath Towels' },
-    { key: 'hand_towels', label: 'Hand Towels' },
+    { key: 'pillows', label: 'Pillows' },
     { key: 'blankets', label: 'Blankets' },
+    { key: 'pillowcases', label: 'Pillow Cases' },
+    { key: 'top_sheets', label: 'Top Sheets' },
+    { key: 'face_towels', label: 'Face Towels' },
+    { key: 'body_towels', label: 'Body Towels' },
+  ],
+
+  // Item types shown when adding/editing racks (order matters)
+  rackItems: [
+    { key: 'pillows', label: 'Pillows' },
+    { key: 'blankets', label: 'Blankets' },
+    { key: 'pillowcases', label: 'Pillow Cases' },
+    { key: 'top_sheets', label: 'Top Sheets' },
+    { key: 'face_towels', label: 'Face Towels' },
+    { key: 'body_towels', label: 'Body Towels' },
   ],
 
   // Notifications
