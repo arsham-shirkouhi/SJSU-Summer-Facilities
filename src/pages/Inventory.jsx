@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useId } from 'react'
 import { format } from 'date-fns'
 import {
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
+import { Html5Qrcode } from 'html5-qrcode'
 import TopBar from '../components/TopBar'
 import {
   SkeletonBlock,
@@ -888,74 +889,78 @@ function parseInventoryQr(rawValue) {
 }
 
 function QrScannerModal({ onClose, onDetected }) {
-  const videoRef = useRef(null)
-  const streamRef = useRef(null)
+  const scannerRegionId = useId().replace(/:/g, '')
+  const scannerRef = useRef(null)
   const [error, setError] = useState('')
   const [manualValue, setManualValue] = useState('')
   const [scannerReady, setScannerReady] = useState(false)
 
   useEffect(() => {
     let active = true
-    let loopTimer = null
-    let detector = null
+    let scanner = null
 
-    const cleanup = () => {
-      if (loopTimer) clearTimeout(loopTimer)
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop())
-        streamRef.current = null
-      }
-    }
-
-    const loopDetect = async () => {
-      if (!active) return
-      const video = videoRef.current
-      if (video && detector && video.readyState >= 2) {
-        try {
-          const results = await detector.detect(video)
-          if (results?.length && results[0]?.rawValue) {
-            onDetected(results[0].rawValue)
-            return
-          }
-        } catch (_detectError) {
-          // Keep scanning even if one detect frame fails.
+    const stopScanner = async () => {
+      if (!scanner) return
+      try {
+        if (scanner.isScanning) {
+          await scanner.stop()
         }
+        scanner.clear()
+      } catch (_error) {
+        // Ignore cleanup errors when the modal closes mid-scan.
       }
-      loopTimer = setTimeout(loopDetect, 280)
     }
 
     const start = async () => {
-      if (!('BarcodeDetector' in window)) {
-        setError('Camera QR scan is not supported in this browser. Paste QR link below.')
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError('Camera access is not available in this browser. Paste the QR link below.')
         return
       }
+
       try {
-        detector = new window.BarcodeDetector({ formats: ['qr_code'] })
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-        })
+        scanner = new Html5Qrcode(scannerRegionId)
+        scannerRef.current = scanner
+
+        await scanner.start(
+          { facingMode: { ideal: 'environment' } },
+          {
+            fps: 10,
+            qrbox: (viewfinderWidth, viewfinderHeight) => {
+              const edge = Math.min(viewfinderWidth, viewfinderHeight)
+              const size = Math.max(180, Math.floor(edge * 0.72))
+              return { width: size, height: size }
+            },
+            aspectRatio: 1.777778,
+          },
+          (decodedText) => {
+            if (!active) return
+            active = false
+            stopScanner().finally(() => onDetected(decodedText))
+          },
+          () => {},
+        )
+
         if (!active) {
-          stream.getTracks().forEach((track) => track.stop())
+          await stopScanner()
           return
         }
-        streamRef.current = stream
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          await videoRef.current.play()
-          setScannerReady(true)
-        }
-        loopDetect()
+
+        setScannerReady(true)
       } catch (_error) {
-        setError('Unable to access camera. Check permissions or paste the QR link below.')
+        if (active) {
+          setError('Unable to access camera. Check permissions or paste the QR link below.')
+        }
       }
     }
 
     start()
+
     return () => {
       active = false
-      cleanup()
+      stopScanner()
+      scannerRef.current = null
     }
-  }, [onDetected])
+  }, [onDetected, scannerRegionId])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/65 px-4">
@@ -972,8 +977,8 @@ function QrScannerModal({ onClose, onDetected }) {
 
         <div className="mb-3 overflow-hidden border-[2.5px] border-ink bg-cream">
           <div className="relative aspect-video bg-ink/10">
-            <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
-            {!scannerReady ? (
+            <div id={scannerRegionId} className="h-full w-full [&_video]:h-full [&_video]:w-full [&_video]:object-cover" />
+            {!scannerReady && !error ? (
               <div className="absolute inset-0 flex items-center justify-center gap-2 text-[12px] font-bold uppercase text-ink/80">
                 <Camera size={16} />
                 Starting camera...
