@@ -33,7 +33,7 @@ import {
   getStorageRooms,
   updateLaundryLoadStatus,
 } from '../lib/queries'
-import { formatEventTimeRange, parseEventNotes } from '../lib/eventNotes'
+import { formatEventScheduleLabel, getEventColor, parseEventNotes } from '../lib/eventNotes'
 
 const ROOM_DISPLAY_ORDER = [
   'Mailroom Storage',
@@ -391,7 +391,10 @@ function PickupBanner({ nextEvents, pickupError, onRetry, viewSchedulePath }) {
           <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2">
             {events.map((event, index) => {
               const parsed = parseEventNotes(event.notes)
-              const timeLabel = formatEventTimeRange(parsed.startTime, parsed.endTime)
+              const color = getEventColor(parsed.color)
+              const scheduleLabel = formatEventScheduleLabel(event, (value) =>
+                format(parseISO(value), 'MMM d, yyyy'),
+              )
               return (
                 <button
                   key={event.id}
@@ -400,6 +403,7 @@ function PickupBanner({ nextEvents, pickupError, onRetry, viewSchedulePath }) {
                   className={`border-2 border-ink bg-white px-3 py-2.5 text-left shadow-[2px_2px_0_#001A57] transition-transform hover:-translate-y-0.5 ${
                     index === 0 ? 'ring-2 ring-primary ring-offset-2' : ''
                   }`}
+                  style={{ borderLeftWidth: '5px', borderLeftColor: color.bg }}
                 >
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <p className="text-[12px] font-extrabold uppercase">
@@ -407,8 +411,8 @@ function PickupBanner({ nextEvents, pickupError, onRetry, viewSchedulePath }) {
                     </p>
                     {index === 0 ? <span className="stamp stamp-blue text-[8px]">Next Up</span> : null}
                   </div>
-                  {timeLabel ? (
-                    <p className="mono text-[11px] font-bold text-[#6B6B6B]">{timeLabel}</p>
+                  {scheduleLabel ? (
+                    <p className="mono text-[11px] font-bold text-[#6B6B6B]">{scheduleLabel}</p>
                   ) : (
                     <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">All day</p>
                   )}
@@ -427,7 +431,8 @@ function PickupBanner({ nextEvents, pickupError, onRetry, viewSchedulePath }) {
   }
 
   const parsed = parseEventNotes(events[0]?.notes)
-  const timeLabel = formatEventTimeRange(parsed.startTime, parsed.endTime)
+  const color = getEventColor(parsed.color)
+  const scheduleLabel = formatEventScheduleLabel(events[0], (value) => format(parseISO(value), 'MMM d, yyyy'))
   const title = parsed.title || format(nextDate, 'EEEE, MMMM d')
 
   return (
@@ -436,12 +441,13 @@ function PickupBanner({ nextEvents, pickupError, onRetry, viewSchedulePath }) {
         type="button"
         onClick={() => openEventDetail(events[0])}
         className={`mb-5 flex w-full flex-wrap items-center gap-3 border-[2.5px] border-ink px-4 py-3 text-left shadow-brutal transition-transform hover:-translate-y-0.5 ${bg}`}
+        style={{ borderLeftWidth: '6px', borderLeftColor: color.bg }}
       >
         <CalendarDays size={20} />
         <div className="min-w-0 flex-1">
           <p className="text-[11px] font-extrabold uppercase">Next Event:</p>
           <p className="mono text-[15px] font-bold">{title.toUpperCase()}</p>
-          {timeLabel ? <p className="mono text-[11px] font-bold text-[#6B6B6B]">{timeLabel}</p> : null}
+          {scheduleLabel ? <p className="mono text-[11px] font-bold text-[#6B6B6B]">{scheduleLabel}</p> : null}
           {parsed.description ? (
             <p className="mt-1 line-clamp-2 text-[12px] text-[#6B6B6B]">{parsed.description}</p>
           ) : null}

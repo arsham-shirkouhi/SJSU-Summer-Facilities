@@ -1,8 +1,14 @@
 import { useEffect } from 'react'
-import { format } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 import { Truck, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { formatEventTimeRange, parseEventNotes } from '../lib/eventNotes'
+import {
+  formatEventDateRange,
+  formatEventScheduleLabel,
+  getEventColor,
+  getEventDateRange,
+  parseEventNotes,
+} from '../lib/eventNotes'
 
 export default function EventDetailModal({ date, event, onClose, viewSchedulePath }) {
   const navigate = useNavigate()
@@ -21,7 +27,9 @@ export default function EventDetailModal({ date, event, onClose, viewSchedulePat
   if (!date || !event) return null
 
   const parsed = parseEventNotes(event.notes)
-  const timeLabel = formatEventTimeRange(parsed.startTime, parsed.endTime)
+  const color = getEventColor(parsed.color)
+  const scheduleLabel = formatEventScheduleLabel(event, (value) => format(parseISO(value), 'MMM d, yyyy'))
+  const { startDate, endDate } = getEventDateRange(event)
   const title = parsed.title || 'Scheduled Event'
 
   return (
@@ -32,13 +40,17 @@ export default function EventDetailModal({ date, event, onClose, viewSchedulePat
         onClick={onClose}
         aria-label="Close event details"
       />
-      <div className="brutal-card relative max-h-[85vh] w-full max-w-[520px] overflow-y-auto bg-white p-5">
+      <div
+        className="brutal-card relative max-h-[85vh] w-full max-w-[520px] overflow-y-auto bg-white p-5"
+        style={{ borderTopWidth: '6px', borderTopColor: color.bg }}
+      >
         <div className="mb-4 flex items-start justify-between gap-3 border-b-[2.5px] border-ink pb-3">
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">Event Details</p>
             <h3 className="text-[20px] font-extrabold uppercase leading-tight">{title}</h3>
             <p className="mono mt-1 text-[12px] font-bold text-[#6B6B6B]">
-              {format(date, 'EEEE, MMMM d')}
+              {formatEventDateRange(startDate, endDate, (value) => format(parseISO(value), 'EEEE, MMMM d')) ||
+                format(date, 'EEEE, MMMM d')}
             </p>
           </div>
           <button type="button" className="brutal-btn shrink-0 bg-white px-2 py-1 text-[10px]" onClick={onClose}>
@@ -46,14 +58,21 @@ export default function EventDetailModal({ date, event, onClose, viewSchedulePat
           </button>
         </div>
 
-        <div className="border-2 border-ink bg-cream px-3.5 py-3 shadow-[2px_2px_0_#001A57]">
+        <div
+          className="border-2 border-ink px-3.5 py-3 shadow-[2px_2px_0_#001A57]"
+          style={{ backgroundColor: color.light }}
+        >
           <div className="mb-2 flex items-center gap-2">
-            <Truck size={14} className="shrink-0" />
+            <span
+              className="h-3 w-3 shrink-0 border border-ink"
+              style={{ backgroundColor: color.bg }}
+              aria-hidden="true"
+            />
             <p className="text-[11px] font-extrabold uppercase tracking-[0.08em] text-[#6B6B6B]">Schedule</p>
           </div>
 
-          {timeLabel ? (
-            <p className="mono mb-3 text-[13px] font-bold">{timeLabel}</p>
+          {scheduleLabel ? (
+            <p className="mono mb-3 text-[13px] font-bold">{scheduleLabel}</p>
           ) : (
             <p className="mb-3 text-[11px] uppercase tracking-[0.08em] text-[#6B6B6B]">All day</p>
           )}

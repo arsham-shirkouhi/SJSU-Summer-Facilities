@@ -20,6 +20,15 @@ import { ChevronLeft, ChevronRight, History, Truck, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuth } from '../context/AuthContext'
 import { addPickupDate, getPickupDates, removePickupDate } from '../lib/queries'
+import {
+  DEFAULT_EVENT_COLOR,
+  EVENT_COLORS,
+  formatEventDateRange,
+  getEventColor,
+  getEventDateRange,
+  parseEventNotes,
+  serializeEventNotes,
+} from '../lib/eventNotes'
 import { SkeletonCalendarCell } from './Skeleton'
 
 export default function AdminPickupCalendar({
@@ -37,8 +46,9 @@ export default function AdminPickupCalendar({
   const [confirmRemoveId, setConfirmRemoveId] = useState(null)
   const [eventTitle, setEventTitle] = useState('')
   const [eventDescription, setEventDescription] = useState('')
-  const [startTime, setStartTime] = useState('')
-  const [endTime, setEndTime] = useState('')
+  const [eventStartDate, setEventStartDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [eventEndDate, setEventEndDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [eventColor, setEventColor] = useState(DEFAULT_EVENT_COLOR)
   const [isRepeated, setIsRepeated] = useState(false)
   const [repeatDays, setRepeatDays] = useState([getDay(new Date())])
   const [showEventDrawer, setShowEventDrawer] = useState(false)
@@ -60,12 +70,28 @@ export default function AdminPickupCalendar({
     refetchDates()
   }, [])
 
+  useEffect(() => {
+    if (!showAddEvent) return
+    const dateKey = format(selectedDate, 'yyyy-MM-dd')
+    setEventStartDate(dateKey)
+    setEventEndDate(dateKey)
+  }, [showAddEvent, selectedDate])
+
   const eventsByDate = useMemo(() => {
     const grouped = new Map()
     for (const entry of pickupDates) {
-      const list = grouped.get(entry.pickup_date) || []
-      list.push(entry)
-      grouped.set(entry.pickup_date, list)
+      const { startDate, endDate } = getEventDateRange(entry)
+      if (!startDate) continue
+
+      let cursor = parseISO(startDate)
+      const end = parseISO(endDate || startDate)
+      while (cursor <= end) {
+        const key = format(cursor, 'yyyy-MM-dd')
+        const list = grouped.get(key) || []
+        list.push(entry)
+        grouped.set(key, list)
+        cursor = addDays(cursor, 1)
+      }
     }
     return grouped
   }, [pickupDates])
@@ -83,26 +109,30 @@ export default function AdminPickupCalendar({
   }, [currentMonth])
 
   const upcomingPickups = useMemo(() => {
-    const today = new Date()
+    const today = format(new Date(), 'yyyy-MM-dd')
     return pickupDates
-      .filter((entry) => differenceInCalendarDays(parseISO(entry.pickup_date), today) >= 0)
+      .filter((entry) => getEventDateRange(entry).endDate >= today)
       .sort((a, b) => {
-        if (a.pickup_date !== b.pickup_date) return a.pickup_date.localeCompare(b.pickup_date)
-        const aTime = parseEventNotes(a.notes).startTime || ''
-        const bTime = parseEventNotes(b.notes).startTime || ''
-        return aTime.localeCompare(bTime)
+        const aRange = getEventDateRange(a)
+        const bRange = getEventDateRange(b)
+        if (aRange.startDate !== bRange.startDate) return aRange.startDate.localeCompare(bRange.startDate)
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''))
       })
   }, [pickupDates])
 
   const upcomingEventGroups = useMemo(() => {
+    const today = format(new Date(), 'yyyy-MM-dd')
     const grouped = new Map()
     for (const entry of upcomingPickups) {
-      const key = entry.pickup_date
+      const { startDate } = getEventDateRange(entry)
+      const key = startDate >= today ? startDate : today
       const list = grouped.get(key) || []
-      list.push(entry)
+      if (!list.some((item) => item.id === entry.id)) list.push(entry)
       grouped.set(key, list)
     }
-    return [...grouped.entries()].map(([date, entries]) => ({ date, entries }))
+    return [...grouped.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, entries]) => ({ date, entries }))
   }, [upcomingPickups])
 
   const pastEventGroups = useMemo(() => {
@@ -112,21 +142,23 @@ export default function AdminPickupCalendar({
 
     const pastEntries = pickupDates
       .filter((entry) => {
-        if (entry.pickup_date < monthStart || entry.pickup_date > monthEnd) return false
-        return isBefore(parseISO(entry.pickup_date), today)
+        const range = getEventDateRange(entry)
+        if (range.endDate < monthStart || range.startDate > monthEnd) return false
+        return range.endDate < format(today, 'yyyy-MM-dd')
       })
       .sort((a, b) => {
-        if (a.pickup_date !== b.pickup_date) return b.pickup_date.localeCompare(a.pickup_date)
-        const aTime = parseEventNotes(a.notes).startTime || ''
-        const bTime = parseEventNotes(b.notes).startTime || ''
-        return bTime.localeCompare(aTime)
+        const aRange = getEventDateRange(a)
+        const bRange = getEventDateRange(b)
+        if (aRange.endDate !== bRange.endDate) return bRange.endDate.localeCompare(aRange.endDate)
+        return String(b.created_at || '').localeCompare(String(a.created_at || ''))
       })
 
     const grouped = new Map()
     for (const entry of pastEntries) {
-      const list = grouped.get(entry.pickup_date) || []
-      list.push(entry)
-      grouped.set(entry.pickup_date, list)
+      const key = getEventDateRange(entry).endDate
+      const list = grouped.get(key) || []
+      if (!list.some((item) => item.id === entry.id)) list.push(entry)
+      grouped.set(key, list)
     }
 
     return [...grouped.entries()].map(([date, entries]) => ({ date, entries }))
@@ -201,10 +233,20 @@ export default function AdminPickupCalendar({
       toast.error('Add an event title first')
       return
     }
+    if (eventEndDate < eventStartDate) {
+      toast.error('End date must be on or after start date')
+      return
+    }
+
+    const notesPayload = {
+      title: eventTitle.trim(),
+      description: eventDescription.trim(),
+      color: eventColor,
+    }
 
     const seriesDates = new Set()
     if (!isRepeated) {
-      seriesDates.add(format(selectedDate, 'yyyy-MM-dd'))
+      seriesDates.add(eventStartDate)
     } else {
       const selectedDays = [...repeatDays]
       if (!selectedDays.length) {
@@ -227,14 +269,15 @@ export default function AdminPickupCalendar({
 
     for (const dateValue of [...seriesDates].sort()) {
       try {
+        const rangeStart = isRepeated ? dateValue : eventStartDate
+        const rangeEnd = isRepeated ? dateValue : eventEndDate
         const inserted = await addPickupDate(
-          dateValue,
+          rangeStart,
           user?.id,
           serializeEventNotes({
-            title: eventTitle.trim(),
-            description: eventDescription.trim(),
-            startTime,
-            endTime,
+            ...notesPayload,
+            startDate: rangeStart,
+            endDate: rangeEnd,
           }),
         )
         setPickupDates((current) =>
@@ -251,8 +294,9 @@ export default function AdminPickupCalendar({
     if (successCount) {
       setEventTitle('')
       setEventDescription('')
-      setStartTime('')
-      setEndTime('')
+      setEventStartDate(format(selectedDate, 'yyyy-MM-dd'))
+      setEventEndDate(format(selectedDate, 'yyyy-MM-dd'))
+      setEventColor(DEFAULT_EVENT_COLOR)
       setIsRepeated(false)
       setRepeatDays([getDay(selectedDate)])
       onModalChange(false)
@@ -320,13 +364,23 @@ export default function AdminPickupCalendar({
                     return <div key={dateKey} className="h-[72px] bg-cream sm:h-[78px]" />
                   }
 
+                  const primaryColor = hasEvents
+                    ? getEventColor(parseEventNotes(dayEvents[0].notes).color)
+                    : null
+
                   let cellClass = 'border-[#E8E4DC] bg-white text-ink'
+                  let cellStyle
                   if (isPast && hasEvents) {
                     cellClass = 'border-[#A8A49C] bg-[#8A8680] text-white'
                   } else if (isPast) {
                     cellClass = 'border-[#D4D0C8] bg-[#E4E0D8] text-[#7A7670]'
-                  } else if (hasEvents) {
-                    cellClass = 'border-ink bg-ink text-white'
+                  } else if (hasEvents && primaryColor) {
+                    cellClass = 'border-[1.5px] text-white'
+                    cellStyle = {
+                      backgroundColor: primaryColor.bg,
+                      borderColor: primaryColor.bg,
+                      color: primaryColor.text,
+                    }
                   }
 
                   return (
@@ -334,6 +388,7 @@ export default function AdminPickupCalendar({
                       key={dateKey}
                       type="button"
                       onClick={() => handleDateClick(date)}
+                      style={cellStyle}
                       className={`relative h-[72px] border text-center sm:h-[78px] ${cellClass} ${isTodayDate ? 'border-[2.5px] border-ink font-extrabold' : 'border-[1.5px]'} ${!hasEvents && !isPast ? 'hover:border-primary hover:bg-[#DCE7FF]' : ''} ${isPast && hasEvents ? 'hover:bg-[#7A7670]' : ''}`}
                     >
                       <div className="flex h-full flex-col items-center justify-center px-1">
@@ -396,48 +451,45 @@ export default function AdminPickupCalendar({
               />
               <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div>
-                  <p className="mb-1 text-[10px] font-bold uppercase">Date</p>
+                  <p className="mb-1 text-[10px] font-bold uppercase">Start Date</p>
                   <input
                     className="brutal-input h-12"
                     type="date"
-                    value={format(selectedDate, 'yyyy-MM-dd')}
+                    value={eventStartDate}
+                    disabled={isRepeated}
                     onChange={(event) => {
-                      const parsed = parseISO(event.target.value)
-                      if (!Number.isNaN(parsed.getTime())) setSelectedDate(parsed)
+                      const nextStart = event.target.value
+                      setEventStartDate(nextStart)
+                      if (eventEndDate < nextStart) setEventEndDate(nextStart)
                     }}
                   />
                 </div>
                 <div>
-                  <p className="mb-1 text-[10px] font-bold uppercase">Repeat Event</p>
-                  <select
+                  <p className="mb-1 text-[10px] font-bold uppercase">End Date</p>
+                  <input
                     className="brutal-input h-12"
-                    value={isRepeated ? 'yes' : 'no'}
-                    onChange={(event) => setIsRepeated(event.target.value === 'yes')}
-                  >
-                    <option value="no">No</option>
-                    <option value="yes">Yes</option>
-                  </select>
+                    type="date"
+                    value={eventEndDate}
+                    min={eventStartDate}
+                    disabled={isRepeated}
+                    onChange={(event) => setEventEndDate(event.target.value)}
+                  />
                 </div>
               </div>
-              <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <div>
-                  <p className="mb-1 text-[10px] font-bold uppercase">Start Time (Optional)</p>
-                  <input
-                    className="brutal-input h-12"
-                    type="time"
-                    value={startTime}
-                    onChange={(event) => setStartTime(event.target.value)}
-                  />
-                </div>
-                <div>
-                  <p className="mb-1 text-[10px] font-bold uppercase">End Time (Optional)</p>
-                  <input
-                    className="brutal-input h-12"
-                    type="time"
-                    value={endTime}
-                    onChange={(event) => setEndTime(event.target.value)}
-                  />
-                </div>
+              <div className="mb-2">
+                <p className="mb-1 text-[10px] font-bold uppercase">Repeat Event</p>
+                <select
+                  className="brutal-input h-12"
+                  value={isRepeated ? 'yes' : 'no'}
+                  onChange={(event) => setIsRepeated(event.target.value === 'yes')}
+                >
+                  <option value="no">No</option>
+                  <option value="yes">Yes</option>
+                </select>
+              </div>
+              <div className="mb-3">
+                <p className="mb-2 text-[10px] font-bold uppercase">Event Color</p>
+                <EventColorPicker value={eventColor} onChange={setEventColor} />
               </div>
               {isRepeated ? (
                 <div className="mb-2">
@@ -508,14 +560,22 @@ export default function AdminPickupCalendar({
                 <div className="space-y-1.5">
                   {group.entries.map((entry) => {
                     const parsed = parseEventNotes(entry.notes)
+                    const color = getEventColor(parsed.color)
+                    const dateLabel = formatEventDateRange(
+                      getEventDateRange(entry).startDate,
+                      getEventDateRange(entry).endDate,
+                      (value) => format(parseISO(value), 'MMM d, yyyy'),
+                    )
                     return (
-                      <div key={entry.id} className="flex items-start gap-2 rounded-sm border border-stone bg-cream px-2 py-2">
+                      <div
+                        key={entry.id}
+                        className="flex items-start gap-2 rounded-sm border border-stone bg-cream px-2 py-2"
+                        style={{ borderLeftWidth: '4px', borderLeftColor: color.bg }}
+                      >
                         <div className="flex-1">
                           <p className="text-[12px] font-semibold">{parsed.title || 'Scheduled event'}</p>
-                          {parsed.startTime || parsed.endTime ? (
-                            <p className="mono text-[10px] text-[#6B6B6B]">
-                              {parsed.startTime || '--:--'} - {parsed.endTime || '--:--'}
-                            </p>
+                          {dateLabel ? (
+                            <p className="mono text-[10px] text-[#6B6B6B]">{dateLabel}</p>
                           ) : null}
                           {parsed.description ? <p className="text-[10px] text-[#8A8A8A]">{parsed.description}</p> : null}
                         </div>
@@ -585,17 +645,22 @@ function PastEventsList({ groups, monthLabel, onOpenDate }) {
             <div className="space-y-1.5">
               {group.entries.map((entry) => {
                 const parsed = parseEventNotes(entry.notes)
+                const color = getEventColor(parsed.color)
+                const dateLabel = formatEventDateRange(
+                  getEventDateRange(entry).startDate,
+                  getEventDateRange(entry).endDate,
+                  (value) => format(parseISO(value), 'MMM d, yyyy'),
+                )
                 return (
                   <div
                     key={entry.id}
                     className="flex items-start gap-2 rounded-sm border border-[#C8C4BC] bg-[#E4E0D8] px-2 py-2"
+                    style={{ borderLeftWidth: '4px', borderLeftColor: color.bg }}
                   >
                     <div className="flex-1">
                       <p className="text-[12px] font-semibold text-[#4A4A4A]">{parsed.title || 'Scheduled event'}</p>
-                      {parsed.startTime || parsed.endTime ? (
-                        <p className="mono text-[10px] text-[#8A8A8A]">
-                          {parsed.startTime || '--:--'} - {parsed.endTime || '--:--'}
-                        </p>
+                      {dateLabel ? (
+                        <p className="mono text-[10px] text-[#8A8A8A]">{dateLabel}</p>
                       ) : null}
                       {parsed.description ? (
                         <p className="text-[10px] text-[#8A8A8A]">{parsed.description}</p>
@@ -648,19 +713,29 @@ function EventDetailsDrawer({ date, entries, open, onClose }) {
             {entries.length ? (
               entries.map((entry) => {
                 const parsed = parseEventNotes(entry.notes)
+                const color = getEventColor(parsed.color)
+                const dateLabel = formatEventDateRange(
+                  getEventDateRange(entry).startDate,
+                  getEventDateRange(entry).endDate,
+                  (value) => format(parseISO(value), 'MMM d, yyyy'),
+                )
                 return (
-                  <div key={entry.id} className="brutal-card mb-2.5 bg-white p-3">
+                  <div
+                    key={entry.id}
+                    className="brutal-card mb-2.5 bg-white p-3"
+                    style={{ borderLeftWidth: '5px', borderLeftColor: color.bg }}
+                  >
                     <div className="mb-1 flex items-center gap-2">
-                      <Truck size={14} />
+                      <span
+                        className="h-3 w-3 shrink-0 border border-ink"
+                        style={{ backgroundColor: color.bg }}
+                        aria-hidden="true"
+                      />
                       <p className="text-[13px] font-extrabold uppercase">{parsed.title || 'Scheduled event'}</p>
                     </div>
+                    {dateLabel ? <p className="mono mb-2 text-[11px]">{dateLabel}</p> : null}
                     {parsed.description ? (
-                      <p className="mb-2 text-[12px] text-[#6B6B6B]">{parsed.description}</p>
-                    ) : null}
-                    {parsed.startTime || parsed.endTime ? (
-                      <p className="mono mb-2 text-[11px]">
-                        {parsed.startTime || '--:--'} - {parsed.endTime || '--:--'}
-                      </p>
+                      <p className="text-[12px] text-[#6B6B6B]">{parsed.description}</p>
                     ) : null}
                   </div>
                 )
@@ -706,24 +781,27 @@ const WEEKDAY_OPTIONS = [
   { value: 6, label: 'Sat' },
 ]
 
-function serializeEventNotes({ title, description, startTime, endTime }) {
-  return `LT_EVENT:${JSON.stringify({ title, description, startTime, endTime })}`
-}
-
-function parseEventNotes(notes) {
-  if (!notes) return { title: '', description: '', startTime: '', endTime: '' }
-  if (typeof notes === 'string' && notes.startsWith('LT_EVENT:')) {
-    try {
-      const parsed = JSON.parse(notes.slice('LT_EVENT:'.length))
-      return {
-        title: parsed?.title || '',
-        description: parsed?.description || '',
-        startTime: parsed?.startTime || '',
-        endTime: parsed?.endTime || '',
-      }
-    } catch (_error) {
-      return { title: String(notes), description: '', startTime: '', endTime: '' }
-    }
-  }
-  return { title: String(notes), description: '', startTime: '', endTime: '' }
+function EventColorPicker({ value, onChange }) {
+  return (
+    <div className="grid grid-cols-4 gap-2 sm:grid-cols-8">
+      {EVENT_COLORS.map((color) => {
+        const selected = value === color.id
+        return (
+          <button
+            key={color.id}
+            type="button"
+            title={color.label}
+            aria-label={color.label}
+            onClick={() => onChange(color.id)}
+            className={`flex h-10 items-center justify-center border-2 transition-transform ${
+              selected ? 'scale-105 border-ink shadow-[2px_2px_0_#001A57]' : 'border-[#D4D0C8] hover:border-ink'
+            }`}
+            style={{ backgroundColor: color.bg, color: color.text }}
+          >
+            {selected ? <span className="text-[10px] font-extrabold">✓</span> : null}
+          </button>
+        )
+      })}
+    </div>
+  )
 }

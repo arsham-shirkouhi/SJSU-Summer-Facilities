@@ -1,7 +1,7 @@
 import { format } from 'date-fns'
 import { supabase } from '../supabase'
 import { SETTINGS } from '../config/settings'
-import { parseEventNotes } from './eventNotes'
+import { eventIsActiveOnDate, getEventDateRange } from './eventNotes'
 
 const todayIso = () => format(new Date(), 'yyyy-MM-dd')
 const startOfTodayIso = () => `${todayIso()}T00:00:00`
@@ -413,6 +413,35 @@ export async function getShelvesByRoom(locationId) {
       shelf_items: shelfItemsByShelf[shelf.id] || [],
       balances: balancesByShelf[shelf.id] || [],
     }))
+  } catch (error) {
+    throw error
+  }
+}
+
+export async function getShelfByCode(code) {
+  const normalized = String(code || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+  if (!normalized) return null
+
+  try {
+    const { data, error } = await withTimeout(
+      supabase
+        .from('shelves')
+        .select('id,name,qr_slug,location_id')
+        .eq('qr_slug', normalized)
+        .maybeSingle(),
+    )
+    if (error) throw error
+    if (!data?.id || !data.location_id) return null
+
+    return {
+      shelfId: data.id,
+      roomId: data.location_id,
+      name: data.name,
+      qrSlug: data.qr_slug,
+    }
   } catch (error) {
     throw error
   }
@@ -1119,24 +1148,36 @@ export async function getNextPickupEvents() {
       supabase
         .from('pickup_schedule')
         .select('id,pickup_date,notes,created_at')
-        .gte('pickup_date', todayIso())
         .order('pickup_date', { ascending: true })
-        .limit(100),
+        .limit(200),
     )
     if (error) throw error
     if (!data?.length) return { date: null, events: [] }
 
-    const firstDate = data[0].pickup_date
-    const events = data
-      .filter((entry) => entry.pickup_date === firstDate)
+    const today = todayIso()
+    const upcoming = (data || [])
+      .filter((entry) => getEventDateRange(entry).endDate >= today)
       .sort((a, b) => {
-        const aTime = parseEventNotes(a.notes).startTime || ''
-        const bTime = parseEventNotes(b.notes).startTime || ''
-        if (aTime !== bTime) return aTime.localeCompare(bTime)
+        const aRange = getEventDateRange(a)
+        const bRange = getEventDateRange(b)
+        if (aRange.startDate !== bRange.startDate) {
+          return aRange.startDate.localeCompare(bRange.startDate)
+        }
         return String(a.created_at || '').localeCompare(String(b.created_at || ''))
       })
 
-    return { date: firstDate, events }
+    if (!upcoming.length) return { date: null, events: [] }
+
+    const displayDate = upcoming.reduce((best, entry) => {
+      const { startDate } = getEventDateRange(entry)
+      const candidate = startDate >= today ? startDate : today
+      if (!best || candidate < best) return candidate
+      return best
+    }, null)
+
+    const events = upcoming.filter((entry) => eventIsActiveOnDate(entry, displayDate))
+
+    return { date: displayDate, events }
   } catch (error) {
     throw error
   }

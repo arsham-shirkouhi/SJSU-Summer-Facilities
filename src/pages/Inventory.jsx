@@ -1,21 +1,19 @@
-import { useEffect, useMemo, useRef, useState, useId } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import {
   ArrowLeft,
   ArrowLeftRight,
   BarChart3,
-  Camera,
   ChevronRight,
+  Hash,
   Layers,
   Package2,
   Pencil,
   Plus,
-  QrCode,
   Trash2,
 } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Html5Qrcode } from 'html5-qrcode'
 import TopBar from '../components/TopBar'
 import {
   SkeletonBlock,
@@ -33,6 +31,7 @@ import {
   getRackItems,
   getLocationById,
   getLocations,
+  getShelfByCode,
   getShelvesByRoom,
   getStorageRooms,
   transferShelfItemCount,
@@ -86,7 +85,8 @@ export default function Inventory() {
   const [savedBaseline, setSavedBaseline] = useState(0)
   const [savingCount, setSavingCount] = useState(false)
   const [savedConfirmation, setSavedConfirmation] = useState(null)
-  const [showQrScanner, setShowQrScanner] = useState(false)
+  const [showRackCodeModal, setShowRackCodeModal] = useState(false)
+  const [rackCodeSubmitting, setRackCodeSubmitting] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
   const [adminRacks, setAdminRacks] = useState([])
   const [rackItems, setRackItems] = useState([])
@@ -421,18 +421,38 @@ export default function Inventory() {
       setRackDeleting(false)
     }
   }
-  const handleQrDetected = (rawValue) => {
-    const parsed = parseInventoryQr(rawValue)
-    if (!parsed?.roomId) {
-      toast.error('QR code is not a valid LinenTrack inventory link')
+  const handleRackCodeSubmit = async (rawValue) => {
+    const value = String(rawValue || '').trim()
+    if (!value) {
+      toast.error('Enter a rack code')
       return
     }
-    setShowQrScanner(false)
-    if (parsed.shelfId) {
-      openShelf(parsed.roomId, parsed.shelfId)
+
+    const parsedLink = parseInventoryLink(value)
+    if (parsedLink?.roomId) {
+      setShowRackCodeModal(false)
+      if (parsedLink.shelfId) {
+        openShelf(parsedLink.roomId, parsedLink.shelfId)
+      } else {
+        openRoom(parsedLink.roomId)
+      }
       return
     }
-    openRoom(parsed.roomId)
+
+    try {
+      setRackCodeSubmitting(true)
+      const rack = await getShelfByCode(value)
+      if (!rack) {
+        toast.error('Rack code not found')
+        return
+      }
+      setShowRackCodeModal(false)
+      openShelf(rack.roomId, rack.shelfId)
+    } catch (lookupError) {
+      toast.error(lookupError.message || 'Failed to look up rack code')
+    } finally {
+      setRackCodeSubmitting(false)
+    }
   }
 
   const renderHeader = (eyebrow, title, subtitle, backAction = null, backLabel = '', actions = null) => (
@@ -482,10 +502,10 @@ export default function Inventory() {
       <button
         type="button"
         className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-1.5 text-[11px]"
-        onClick={() => setShowQrScanner(true)}
+        onClick={() => setShowRackCodeModal(true)}
       >
-        <QrCode size={14} />
-        Scan QR
+        <Hash size={14} />
+        Enter Code
       </button>
       <button
         type="button"
@@ -544,8 +564,12 @@ export default function Inventory() {
             </div>
           )}
         </main>
-        {showQrScanner ? (
-          <QrScannerModal onClose={() => setShowQrScanner(false)} onDetected={handleQrDetected} />
+        {showRackCodeModal ? (
+          <RackCodeModal
+            submitting={rackCodeSubmitting}
+            onClose={() => setShowRackCodeModal(false)}
+            onSubmit={handleRackCodeSubmit}
+          />
         ) : null}
         {showTransfer ? (
           <TransferModal
@@ -866,7 +890,7 @@ export default function Inventory() {
   )
 }
 
-function parseInventoryQr(rawValue) {
+function parseInventoryLink(rawValue) {
   const value = String(rawValue || '').trim()
   if (!value) return null
   try {
@@ -888,127 +912,47 @@ function parseInventoryQr(rawValue) {
   }
 }
 
-function QrScannerModal({ onClose, onDetected }) {
-  const scannerRegionId = useId().replace(/:/g, '')
-  const scannerRef = useRef(null)
-  const [error, setError] = useState('')
-  const [manualValue, setManualValue] = useState('')
-  const [scannerReady, setScannerReady] = useState(false)
+function RackCodeModal({ onClose, onSubmit, submitting }) {
+  const [code, setCode] = useState('')
 
-  useEffect(() => {
-    let active = true
-    let scanner = null
-
-    const stopScanner = async () => {
-      if (!scanner) return
-      try {
-        if (scanner.isScanning) {
-          await scanner.stop()
-        }
-        scanner.clear()
-      } catch (_error) {
-        // Ignore cleanup errors when the modal closes mid-scan.
-      }
-    }
-
-    const start = async () => {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setError('Camera access is not available in this browser. Paste the QR link below.')
-        return
-      }
-
-      try {
-        scanner = new Html5Qrcode(scannerRegionId)
-        scannerRef.current = scanner
-
-        await scanner.start(
-          { facingMode: { ideal: 'environment' } },
-          {
-            fps: 10,
-            qrbox: (viewfinderWidth, viewfinderHeight) => {
-              const edge = Math.min(viewfinderWidth, viewfinderHeight)
-              const size = Math.max(180, Math.floor(edge * 0.72))
-              return { width: size, height: size }
-            },
-            aspectRatio: 1.777778,
-          },
-          (decodedText) => {
-            if (!active) return
-            active = false
-            stopScanner().finally(() => onDetected(decodedText))
-          },
-          () => {},
-        )
-
-        if (!active) {
-          await stopScanner()
-          return
-        }
-
-        setScannerReady(true)
-      } catch (_error) {
-        if (active) {
-          setError('Unable to access camera. Check permissions or paste the QR link below.')
-        }
-      }
-    }
-
-    start()
-
-    return () => {
-      active = false
-      stopScanner()
-      scannerRef.current = null
-    }
-  }, [onDetected, scannerRegionId])
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    onSubmit(code)
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/65 px-4">
-      <div className="brutal-card w-full max-w-[560px] bg-white p-4 sm:p-5">
-        <div className="mb-3 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
+      <div className="brutal-card w-full max-w-[480px] bg-white p-4 sm:p-5">
+        <div className="mb-4 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
           <div>
             <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Inventory</p>
-            <p className="text-[18px] font-extrabold uppercase">Scan Rack QR</p>
+            <p className="text-[18px] font-extrabold uppercase">Enter Rack Code</p>
           </div>
           <button type="button" className="brutal-btn bg-white px-3 py-1.5 text-[11px]" onClick={onClose}>
             Close ✕
           </button>
         </div>
 
-        <div className="mb-3 overflow-hidden border-[2.5px] border-ink bg-cream">
-          <div className="relative aspect-video bg-ink/10">
-            <div id={scannerRegionId} className="h-full w-full [&_video]:h-full [&_video]:w-full [&_video]:object-cover" />
-            {!scannerReady && !error ? (
-              <div className="absolute inset-0 flex items-center justify-center gap-2 text-[12px] font-bold uppercase text-ink/80">
-                <Camera size={16} />
-                Starting camera...
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {error ? (
-          <div className="mb-3 border-2 border-ink bg-danger-light px-3 py-2 text-[12px] font-semibold">
-            {error}
-          </div>
-        ) : null}
-
-        <p className="mb-1 text-[10px] font-bold uppercase">Manual QR Link (fallback)</p>
-        <div className="flex gap-2">
+        <form onSubmit={handleSubmit}>
+          <p className="mb-2 text-[11px] font-semibold text-[#6B6B6B]">
+            Type the rack code to jump straight to that rack.
+          </p>
           <input
-            className="brutal-input"
-            placeholder="Paste inventory QR URL"
-            value={manualValue}
-            onChange={(event) => setManualValue(event.target.value)}
+            className="brutal-input w-full text-[16px] font-bold uppercase"
+            placeholder="e.g. mailroom-rack-a"
+            value={code}
+            autoFocus
+            disabled={submitting}
+            onChange={(event) => setCode(event.target.value)}
           />
           <button
-            type="button"
-            className="brutal-btn bg-primary px-3 py-2 text-[11px] text-white"
-            onClick={() => onDetected(manualValue)}
+            type="submit"
+            disabled={submitting}
+            className="brutal-btn mt-4 w-full bg-primary py-2.5 text-[12px] text-white disabled:opacity-60"
           >
-            Go
+            {submitting ? 'Looking up...' : 'Go to Rack →'}
           </button>
-        </div>
+        </form>
       </div>
     </div>
   )
