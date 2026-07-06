@@ -29,7 +29,6 @@ import {
   createRack,
   deleteRack,
   getAdminRoomRacks,
-  getItems,
   getRackItems,
   getLocationById,
   getLocations,
@@ -839,13 +838,22 @@ export default function Inventory() {
                   key={row.item_id}
                   type="button"
                   onClick={() => openItemCounter(row)}
-                  className="brutal-card bg-white p-4 text-left transition-transform hover:-translate-y-0.5"
+                  className="brutal-card group bg-white p-4 text-left transition-transform hover:-translate-y-0.5"
                 >
-                  <p className="text-[12px] font-extrabold uppercase leading-tight">{row.item_label}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-[12px] font-extrabold uppercase leading-tight">{row.item_label}</p>
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center border-[2px] border-ink bg-cream text-primary transition-colors group-hover:bg-primary group-hover:text-white">
+                      <Pencil size={13} strokeWidth={2.5} />
+                    </span>
+                  </div>
                   <p className="mono mt-2 text-[28px] font-bold leading-none">{row.current_balance}</p>
                   <p className="mt-2 text-[9px] uppercase tracking-[0.06em] text-[#6B6B6B]">
                     Updated {formatLastUpdated(row.updated_at)}
                   </p>
+                  <div className="mt-2 flex items-center justify-end text-[11px] font-bold uppercase text-primary">
+                    Count
+                    <ChevronRight size={14} strokeWidth={3} />
+                  </div>
                 </button>
               ))}
             </section>
@@ -1002,16 +1010,13 @@ function QrScannerModal({ onClose, onDetected }) {
 }
 
 function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
-  const [items, setItems] = useState([])
-  const [loadingMeta, setLoadingMeta] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
   const [fromRoomId, setFromRoomId] = useState('')
   const [fromShelfId, setFromShelfId] = useState('')
   const [toRoomId, setToRoomId] = useState('')
   const [toShelfId, setToShelfId] = useState('')
-  const [itemId, setItemId] = useState('')
-  const [amount, setAmount] = useState(SETTINGS.inventory.countIncrements[1] || 5)
+  const [itemSelections, setItemSelections] = useState({})
 
   const [fromShelves, setFromShelves] = useState([])
   const [toShelves, setToShelves] = useState([])
@@ -1019,24 +1024,10 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
   const [loadingToShelves, setLoadingToShelves] = useState(false)
 
   useEffect(() => {
-    const loadMeta = async () => {
-      try {
-        setLoadingMeta(true)
-        const itemRows = await getItems()
-        setItems(itemRows || [])
-      } catch (loadError) {
-        toast.error(loadError.message || 'Failed to load transfer options')
-      } finally {
-        setLoadingMeta(false)
-      }
-    }
-    loadMeta()
-  }, [])
-
-  useEffect(() => {
     if (!fromRoomId) {
       setFromShelves([])
       setFromShelfId('')
+      setItemSelections({})
       return
     }
     const loadFromShelves = async () => {
@@ -1045,7 +1036,7 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
         const shelves = await getShelvesByRoom(fromRoomId)
         setFromShelves(shelves || [])
         setFromShelfId('')
-        setItemId('')
+        setItemSelections({})
       } catch (loadError) {
         toast.error(loadError.message || 'Failed to load source racks')
       } finally {
@@ -1081,53 +1072,95 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
     [fromShelves, fromShelfId],
   )
 
-  const sourceBalance = useMemo(() => {
-    if (!selectedFromShelf || !itemId) return 0
-    const balance = (selectedFromShelf.balances || []).find((entry) => entry.item_id === itemId)
-    return Number(balance?.current_balance || 0)
-  }, [selectedFromShelf, itemId])
+  const availableTransferItems = useMemo(() => {
+    if (!selectedFromShelf) return []
+    return (selectedFromShelf.balances || [])
+      .filter((entry) => Number(entry.current_balance || 0) > 0)
+      .map((entry) => ({
+        id: entry.item_id,
+        name: entry.items?.name,
+        label: entry.items?.label || entry.items?.name || 'Item',
+        available: Number(entry.current_balance || 0),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [selectedFromShelf])
 
-  const selectedItem = useMemo(
-    () => items.find((item) => item.id === itemId) || null,
-    [items, itemId],
+  const selectedTransferItems = useMemo(
+    () =>
+      Object.entries(itemSelections)
+        .filter(([, selection]) => selection.selected && Number(selection.quantity) > 0)
+        .map(([itemId, selection]) => {
+          const item = availableTransferItems.find((entry) => entry.id === itemId)
+          return {
+            itemId,
+            quantity: Number(selection.quantity),
+            name: item?.name,
+            label: item?.label || 'Item',
+            available: item?.available || 0,
+          }
+        }),
+    [itemSelections, availableTransferItems],
   )
 
-  const availableItems = useMemo(() => {
-    if (!selectedFromShelf) return items
-    const balanceByItem = new Map(
-      (selectedFromShelf.balances || []).map((entry) => [entry.item_id, Number(entry.current_balance || 0)]),
-    )
-    return items.filter((item) => Number(balanceByItem.get(item.id) || 0) > 0)
-  }, [items, selectedFromShelf])
+  const toggleItemSelection = (itemId) => {
+    setItemSelections((current) => {
+      if (current[itemId]?.selected) {
+        const next = { ...current }
+        delete next[itemId]
+        return next
+      }
+      return {
+        ...current,
+        [itemId]: { selected: true, quantity: '' },
+      }
+    })
+  }
+
+  const updateItemQuantity = (itemId, rawValue) => {
+    const quantity = rawValue.replace(/\D/g, '').slice(0, 5)
+    setItemSelections((current) => ({
+      ...current,
+      [itemId]: { selected: true, quantity },
+    }))
+  }
 
   const handleTransfer = async () => {
-    if (!fromRoomId || !fromShelfId || !toRoomId || !toShelfId || !itemId) {
-      toast.error('Select source room/rack, destination room/rack, and item')
+    if (!fromRoomId || !fromShelfId || !toRoomId || !toShelfId) {
+      toast.error('Select source and destination room/rack')
       return
     }
     if (fromShelfId === toShelfId) {
       toast.error('Source and destination racks must be different')
       return
     }
-    if (amount > sourceBalance) {
-      toast.error(`Only ${sourceBalance} available on source rack`)
+    if (!selectedTransferItems.length) {
+      toast.error('Select at least one item and enter an amount')
       return
+    }
+
+    for (const item of selectedTransferItems) {
+      if (item.quantity > item.available) {
+        toast.error(`Only ${item.available} ${item.label} available on source rack`)
+        return
+      }
     }
 
     setSubmitting(true)
     try {
-      await transferShelfItemCount({
-        fromShelfId,
-        fromLocationId: fromRoomId,
-        toShelfId,
-        toLocationId: toRoomId,
-        itemId,
-        quantity: amount,
-        staffId,
-        staffName,
-        itemName: selectedItem?.name,
-        itemLabel: selectedItem?.label,
-      })
+      for (const item of selectedTransferItems) {
+        await transferShelfItemCount({
+          fromShelfId,
+          fromLocationId: fromRoomId,
+          toShelfId,
+          toLocationId: toRoomId,
+          itemId: item.itemId,
+          quantity: item.quantity,
+          staffId,
+          staffName,
+          itemName: item.name,
+          itemLabel: item.label,
+        })
+      }
       onSuccess()
     } catch (transferError) {
       toast.error(transferError.message || 'Transfer failed')
@@ -1149,122 +1182,136 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
           </button>
         </div>
 
-        {loadingMeta ? (
-          <p className="text-[12px] font-semibold">Loading transfer options...</p>
-        ) : (
-          <div className="space-y-4">
-            <section className="border-2 border-ink bg-cream p-3">
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">From</p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <select
-                  className="brutal-input"
-                  value={fromRoomId}
-                  onChange={(event) => setFromRoomId(event.target.value)}
-                >
-                  <option value="">Select room</option>
-                  {rooms.map((room) => (
-                    <option key={room.id} value={room.id}>
-                      {room.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="brutal-input"
-                  value={fromShelfId}
-                  onChange={(event) => setFromShelfId(event.target.value)}
-                  disabled={!fromRoomId || loadingFromShelves}
-                >
-                  <option value="">Select rack</option>
-                  {fromShelves.map((shelf) => (
-                    <option key={shelf.id} value={shelf.id}>
-                      {shelf.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </section>
-
-            <section className="border-2 border-ink bg-cream p-3">
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">To</p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <select
-                  className="brutal-input"
-                  value={toRoomId}
-                  onChange={(event) => setToRoomId(event.target.value)}
-                >
-                  <option value="">Select room</option>
-                  {rooms.map((room) => (
-                    <option key={room.id} value={room.id}>
-                      {room.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="brutal-input"
-                  value={toShelfId}
-                  onChange={(event) => setToShelfId(event.target.value)}
-                  disabled={!toRoomId || loadingToShelves}
-                >
-                  <option value="">Select rack</option>
-                  {toShelves.map((shelf) => (
-                    <option key={shelf.id} value={shelf.id}>
-                      {shelf.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </section>
-
-            <section>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">Item</p>
+        <div className="space-y-4">
+          <section className="border-2 border-ink bg-cream p-3">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">From</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <select
                 className="brutal-input"
-                value={itemId}
-                onChange={(event) => setItemId(event.target.value)}
-                disabled={!fromShelfId}
+                value={fromRoomId}
+                onChange={(event) => setFromRoomId(event.target.value)}
               >
-                <option value="">Select item</option>
-                {availableItems.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label || item.name}
+                <option value="">Select room</option>
+                {rooms.map((room) => (
+                  <option key={room.id} value={room.id}>
+                    {room.name}
                   </option>
                 ))}
               </select>
-              {itemId ? (
-                <p className="mt-1 text-[11px] font-semibold text-[#6B6B6B]">
-                  Available on source rack: <span className="mono text-ink">{sourceBalance}</span>
-                </p>
-              ) : null}
-            </section>
-
-            <section>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">Amount</p>
-              <div className="flex flex-wrap gap-2">
-                {SETTINGS.inventory.countIncrements.map((increment) => (
-                  <button
-                    key={increment}
-                    type="button"
-                    onClick={() => setAmount(increment)}
-                    className={`brutal-btn px-3 py-1.5 text-[11px] ${
-                      amount === increment ? 'bg-primary text-white' : 'bg-white'
-                    }`}
-                  >
-                    {increment}
-                  </button>
+              <select
+                className="brutal-input"
+                value={fromShelfId}
+                onChange={(event) => {
+                  setFromShelfId(event.target.value)
+                  setItemSelections({})
+                }}
+                disabled={!fromRoomId || loadingFromShelves}
+              >
+                <option value="">Select rack</option>
+                {fromShelves.map((shelf) => (
+                  <option key={shelf.id} value={shelf.id}>
+                    {shelf.name}
+                  </option>
                 ))}
-              </div>
-            </section>
+              </select>
+            </div>
+          </section>
 
-            <button
-              type="button"
-              disabled={submitting}
-              className="brutal-btn w-full bg-primary py-2.5 text-[12px] text-white"
-              onClick={handleTransfer}
-            >
-              {submitting ? 'Transferring...' : `Transfer ${amount}`}
-            </button>
-          </div>
-        )}
+          <section className="border-2 border-ink bg-cream p-3">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">To</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <select
+                className="brutal-input"
+                value={toRoomId}
+                onChange={(event) => setToRoomId(event.target.value)}
+              >
+                <option value="">Select room</option>
+                {rooms.map((room) => (
+                  <option key={room.id} value={room.id}>
+                    {room.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="brutal-input"
+                value={toShelfId}
+                onChange={(event) => setToShelfId(event.target.value)}
+                disabled={!toRoomId || loadingToShelves}
+              >
+                <option value="">Select rack</option>
+                {toShelves.map((shelf) => (
+                  <option key={shelf.id} value={shelf.id}>
+                    {shelf.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </section>
+
+          <section>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">Items to Transfer</p>
+            {!fromShelfId ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">Select a source rack first.</p>
+            ) : loadingFromShelves ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">Loading rack items...</p>
+            ) : !availableTransferItems.length ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">No stock available on this rack.</p>
+            ) : (
+              <div className="space-y-2">
+                {availableTransferItems.map((item) => {
+                  const selection = itemSelections[item.id]
+                  const isSelected = Boolean(selection?.selected)
+
+                  return (
+                    <div key={item.id} className="border-2 border-ink bg-cream p-3">
+                      <label className="flex cursor-pointer items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleItemSelection(item.id)}
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[12px] font-extrabold uppercase leading-tight">{item.label}</p>
+                          <p className="mt-1 text-[10px] text-[#6B6B6B]">
+                            Available on rack: <span className="mono font-bold text-ink">{item.available}</span>
+                          </p>
+                        </div>
+                      </label>
+
+                      {isSelected ? (
+                        <div className="mt-3 pl-7">
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em]">Amount to transfer</p>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            className="brutal-input w-full max-w-[180px] text-center text-[18px] font-bold"
+                            placeholder="0"
+                            value={selection.quantity}
+                            onChange={(event) => updateItemQuantity(item.id, event.target.value)}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+
+          <button
+            type="button"
+            disabled={submitting}
+            className="brutal-btn w-full bg-primary py-2.5 text-[12px] text-white disabled:opacity-60"
+            onClick={handleTransfer}
+          >
+            {submitting
+              ? 'Transferring...'
+              : selectedTransferItems.length
+                ? `Transfer ${selectedTransferItems.length} item${selectedTransferItems.length === 1 ? '' : 's'}`
+                : 'Transfer Selected'}
+          </button>
+        </div>
       </div>
     </div>
   )

@@ -139,6 +139,20 @@ html.phone-ui .text-\[12px\].uppercase.tracking-\[0\.05em\] {
   line-height: 1.35;
 }
 
+/* Staff dashboard storage rooms — keep 3 columns on phones */
+html.phone-ui .staff-storage-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 0.5rem !important;
+}
+
+html.phone-ui .staff-storage-grid .brutal-card {
+  padding: 0.65rem !important;
+}
+
+html.phone-ui .staff-storage-grid .mono.text-\[24px\] {
+  font-size: 1.35rem !important;
+}
+
 /* Force single-column cards on phones */
 html.phone-ui .grid.sm\:grid-cols-2,
 html.phone-ui .grid.lg\:grid-cols-3,

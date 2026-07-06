@@ -269,6 +269,11 @@ html.ipad-ui .fixed.inset-0.z-\[60\] .brutal-card.p-5 {
   padding: 2.25rem !important;
 }
 
+/* Staff dashboard storage rooms */
+html.ipad-ui .staff-storage-grid {
+  gap: 0.85rem !important;
+}
+
 /* Admin linen count grid */
 html.ipad-ui .grid.grid-cols-1.gap-2.sm\:grid-cols-2.xl\:grid-cols-3 {
   gap: 1.25rem !important;

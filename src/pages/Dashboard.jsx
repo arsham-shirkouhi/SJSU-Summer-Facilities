@@ -52,6 +52,7 @@ const sortRoomsByDisplayOrder = (rooms) =>
     if (bIndex === -1) return -1
     return aIndex - bIndex
   })
+
 const normalizeRole = (role) => String(role || '').trim().toLowerCase()
 
 export default function Dashboard() {
@@ -170,7 +171,7 @@ function StaffDashboard({ user, profile }) {
   }, [])
 
   return (
-    <section className="mx-auto w-full max-w-[720px] px-4 py-5 sm:px-6 md:px-8">
+    <section className="mx-auto w-full max-w-[1024px] px-4 py-5 sm:px-6 md:px-8">
       <GreetingHeader profile={profile} />
 
       {!dismissedNote && shiftNote ? (
@@ -209,9 +210,9 @@ function StaffDashboard({ user, profile }) {
         ) : !rooms.length ? (
           <EmptyState message="No storage rooms found. Re-run schema.sql seed data." />
         ) : (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="staff-storage-grid grid grid-cols-3 gap-2">
             {sortRoomsByDisplayOrder(rooms).map((room) => (
-              <StorageCard key={room.id} room={room} onShowQr={() => setQrRoom(room)} />
+              <StorageCard key={room.id} room={room} compact onShowQr={() => setQrRoom(room)} />
             ))}
           </div>
         )}
@@ -469,13 +470,55 @@ function QuickAction({ icon: Icon, label, onClick }) {
   )
 }
 
-function StorageCard({ room, onShowQr, admin = false, infoOnly = false, className = '' }) {
+function StorageCard({ room, onShowQr, admin = false, infoOnly = false, compact = false, className = '' }) {
   const navigate = useNavigate()
   const openRoomInventory = () => {
     if (room?.id) navigate(`/inventory?room=${room.id}`)
   }
 
   const notCountedToday = !room.last_count_time || !isToday(parseISO(room.last_count_time))
+  const lastCountLabel = notCountedToday
+    ? 'Not counted today'
+    : formatDistanceToNowStrict(parseISO(room.last_count_time), { addSuffix: true })
+
+  if (compact) {
+    return (
+      <div className={`brutal-card flex min-w-0 flex-col bg-white p-2.5 sm:p-3 ${className}`}>
+        <button
+          type="button"
+          onClick={openRoomInventory}
+          className="mb-1 min-w-0 text-left text-[10px] font-extrabold uppercase leading-tight line-clamp-2 transition-colors hover:text-primary sm:text-[11px]"
+        >
+          {room.name}
+        </button>
+        <p className="mono text-[24px] font-bold leading-none sm:text-[28px]">{room.total_bundles}</p>
+        <p className="text-[8px] uppercase tracking-[0.06em] text-[#6B6B6B] sm:text-[9px]">Items</p>
+        {infoOnly ? null : (
+          <div className="mt-2 flex min-w-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={openRoomInventory}
+              className="brutal-btn min-w-0 flex-1 truncate bg-primary px-1.5 py-1.5 text-[9px] text-white sm:text-[10px]"
+            >
+              Count →
+            </button>
+            <button
+              type="button"
+              onClick={onShowQr}
+              className="brutal-card flex h-8 w-8 shrink-0 items-center justify-center bg-white sm:h-9 sm:w-9"
+              aria-label="Show QR code"
+            >
+              <QrCode size={14} />
+            </button>
+          </div>
+        )}
+        <p className="mt-1.5 min-w-0 text-[8px] uppercase leading-snug text-[#6B6B6B] line-clamp-2 sm:text-[9px]">
+          {lastCountLabel}
+        </p>
+      </div>
+    )
+  }
+
   return (
     <div className={`brutal-card overflow-hidden bg-white p-4 ${className}`}>
       <div className="mb-2">
@@ -702,9 +745,9 @@ function Metric({ value, label, valueClass = 'text-white' }) {
 
 function StorageSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-3">
-      {[1, 2, 3, 4].map((row) => (
-        <SkeletonStorageCard key={row} />
+    <div className="staff-storage-grid grid grid-cols-3 gap-2">
+      {[1, 2, 3, 4, 5, 6].map((row) => (
+        <SkeletonStorageCard key={row} className="min-h-[132px]" />
       ))}
     </div>
   )
