@@ -958,11 +958,14 @@ function RackCodeModal({ onClose, onSubmit, submitting }) {
   )
 }
 
+function transferSelectionKey(shelfId, itemId) {
+  return `${shelfId}:${itemId}`
+}
+
 function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
   const [submitting, setSubmitting] = useState(false)
 
   const [fromRoomId, setFromRoomId] = useState('')
-  const [fromShelfId, setFromShelfId] = useState('')
   const [toRoomId, setToRoomId] = useState('')
   const [toShelfId, setToShelfId] = useState('')
   const [itemSelections, setItemSelections] = useState({})
@@ -975,7 +978,6 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
   useEffect(() => {
     if (!fromRoomId) {
       setFromShelves([])
-      setFromShelfId('')
       setItemSelections({})
       return
     }
@@ -984,7 +986,6 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
         setLoadingFromShelves(true)
         const shelves = await getShelvesByRoom(fromRoomId)
         setFromShelves(shelves || [])
-        setFromShelfId('')
         setItemSelections({})
       } catch (loadError) {
         toast.error(loadError.message || 'Failed to load source racks')
@@ -1016,70 +1017,89 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
     loadToShelves()
   }, [toRoomId])
 
-  const selectedFromShelf = useMemo(
-    () => fromShelves.find((shelf) => shelf.id === fromShelfId) || null,
-    [fromShelves, fromShelfId],
-  )
+  const racksWithStock = useMemo(() => {
+    if (!fromShelves.length) return []
 
-  const availableTransferItems = useMemo(() => {
-    if (!selectedFromShelf) return []
-    return (selectedFromShelf.balances || [])
-      .filter((entry) => Number(entry.current_balance || 0) > 0)
-      .map((entry) => ({
-        id: entry.item_id,
-        name: entry.items?.name,
-        label: entry.items?.label || entry.items?.name || 'Item',
-        available: Number(entry.current_balance || 0),
+    return fromShelves
+      .map((shelf) => ({
+        shelfId: shelf.id,
+        shelfName: shelf.name,
+        items: (shelf.balances || [])
+          .filter((entry) => Number(entry.current_balance || 0) > 0)
+          .map((entry) => ({
+            id: entry.item_id,
+            name: entry.items?.name,
+            label: entry.items?.label || entry.items?.name || 'Item',
+            available: Number(entry.current_balance || 0),
+          }))
+          .sort((a, b) => a.label.localeCompare(b.label)),
       }))
-      .sort((a, b) => a.label.localeCompare(b.label))
-  }, [selectedFromShelf])
+      .filter((group) => group.items.length > 0)
+      .sort((a, b) => a.shelfName.localeCompare(b.shelfName))
+  }, [fromShelves])
+
+  const transferItemLookup = useMemo(() => {
+    const lookup = new Map()
+    for (const rack of racksWithStock) {
+      for (const item of rack.items) {
+        lookup.set(transferSelectionKey(rack.shelfId, item.id), {
+          ...item,
+          shelfId: rack.shelfId,
+          shelfName: rack.shelfName,
+        })
+      }
+    }
+    return lookup
+  }, [racksWithStock])
 
   const selectedTransferItems = useMemo(
     () =>
       Object.entries(itemSelections)
         .filter(([, selection]) => selection.selected && Number(selection.quantity) > 0)
-        .map(([itemId, selection]) => {
-          const item = availableTransferItems.find((entry) => entry.id === itemId)
+        .map(([selectionKey, selection]) => {
+          const item = transferItemLookup.get(selectionKey)
           return {
-            itemId,
+            selectionKey,
+            shelfId: item?.shelfId,
+            shelfName: item?.shelfName || 'Rack',
+            itemId: item?.id,
             quantity: Number(selection.quantity),
             name: item?.name,
             label: item?.label || 'Item',
             available: item?.available || 0,
           }
-        }),
-    [itemSelections, availableTransferItems],
+        })
+        .filter((item) => item.shelfId && item.itemId),
+    [itemSelections, transferItemLookup],
   )
 
-  const toggleItemSelection = (itemId) => {
+  const toggleItemSelection = (shelfId, itemId) => {
+    const selectionKey = transferSelectionKey(shelfId, itemId)
     setItemSelections((current) => {
-      if (current[itemId]?.selected) {
+      if (current[selectionKey]?.selected) {
         const next = { ...current }
-        delete next[itemId]
+        delete next[selectionKey]
         return next
       }
       return {
         ...current,
-        [itemId]: { selected: true, quantity: '' },
+        [selectionKey]: { selected: true, quantity: '' },
       }
     })
   }
 
-  const updateItemQuantity = (itemId, rawValue) => {
+  const updateItemQuantity = (shelfId, itemId, rawValue) => {
+    const selectionKey = transferSelectionKey(shelfId, itemId)
     const quantity = rawValue.replace(/\D/g, '').slice(0, 5)
     setItemSelections((current) => ({
       ...current,
-      [itemId]: { selected: true, quantity },
+      [selectionKey]: { selected: true, quantity },
     }))
   }
 
   const handleTransfer = async () => {
-    if (!fromRoomId || !fromShelfId || !toRoomId || !toShelfId) {
-      toast.error('Select source and destination room/rack')
-      return
-    }
-    if (fromShelfId === toShelfId) {
-      toast.error('Source and destination racks must be different')
+    if (!fromRoomId || !toRoomId || !toShelfId) {
+      toast.error('Select source room, destination room, and destination rack')
       return
     }
     if (!selectedTransferItems.length) {
@@ -1089,7 +1109,11 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
 
     for (const item of selectedTransferItems) {
       if (item.quantity > item.available) {
-        toast.error(`Only ${item.available} ${item.label} available on source rack`)
+        toast.error(`Only ${item.available} ${item.label} available on ${item.shelfName}`)
+        return
+      }
+      if (fromRoomId === toRoomId && item.shelfId === toShelfId) {
+        toast.error(`${item.label} is already on the destination rack`)
         return
       }
     }
@@ -1098,7 +1122,7 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
     try {
       for (const item of selectedTransferItems) {
         await transferShelfItemCount({
-          fromShelfId,
+          fromShelfId: item.shelfId,
           fromLocationId: fromRoomId,
           toShelfId,
           toLocationId: toRoomId,
@@ -1134,36 +1158,21 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
         <div className="space-y-4">
           <section className="border-2 border-ink bg-cream p-3">
             <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">From</p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <select
-                className="brutal-input"
-                value={fromRoomId}
-                onChange={(event) => setFromRoomId(event.target.value)}
-              >
-                <option value="">Select room</option>
-                {rooms.map((room) => (
-                  <option key={room.id} value={room.id}>
-                    {room.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="brutal-input"
-                value={fromShelfId}
-                onChange={(event) => {
-                  setFromShelfId(event.target.value)
-                  setItemSelections({})
-                }}
-                disabled={!fromRoomId || loadingFromShelves}
-              >
-                <option value="">Select rack</option>
-                {fromShelves.map((shelf) => (
-                  <option key={shelf.id} value={shelf.id}>
-                    {shelf.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              className="brutal-input"
+              value={fromRoomId}
+              onChange={(event) => setFromRoomId(event.target.value)}
+            >
+              <option value="">Select room</option>
+              {rooms.map((room) => (
+                <option key={room.id} value={room.id}>
+                  {room.name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-[10px] font-semibold text-[#6B6B6B]">
+              Pick items from one or more racks below.
+            </p>
           </section>
 
           <section className="border-2 border-ink bg-cream p-3">
@@ -1199,51 +1208,66 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
 
           <section>
             <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">Items to Transfer</p>
-            {!fromShelfId ? (
-              <p className="text-[11px] font-semibold text-[#6B6B6B]">Select a source rack first.</p>
+            {!fromRoomId ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">Select a source room first.</p>
             ) : loadingFromShelves ? (
-              <p className="text-[11px] font-semibold text-[#6B6B6B]">Loading rack items...</p>
-            ) : !availableTransferItems.length ? (
-              <p className="text-[11px] font-semibold text-[#6B6B6B]">No stock available on this rack.</p>
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">Loading racks...</p>
+            ) : !racksWithStock.length ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">No stock available in this room.</p>
             ) : (
-              <div className="space-y-2">
-                {availableTransferItems.map((item) => {
-                  const selection = itemSelections[item.id]
-                  const isSelected = Boolean(selection?.selected)
-
-                  return (
-                    <div key={item.id} className="border-2 border-ink bg-cream p-3">
-                      <label className="flex cursor-pointer items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleItemSelection(item.id)}
-                          className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[12px] font-extrabold uppercase leading-tight">{item.label}</p>
-                          <p className="mt-1 text-[10px] text-[#6B6B6B]">
-                            Available on rack: <span className="mono font-bold text-ink">{item.available}</span>
-                          </p>
-                        </div>
-                      </label>
-
-                      {isSelected ? (
-                        <div className="mt-3 pl-7">
-                          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em]">Amount to transfer</p>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            className="brutal-input w-full max-w-[180px] text-center text-[18px] font-bold"
-                            placeholder="0"
-                            value={selection.quantity}
-                            onChange={(event) => updateItemQuantity(item.id, event.target.value)}
-                          />
-                        </div>
-                      ) : null}
+              <div className="space-y-3">
+                {racksWithStock.map((rack) => (
+                  <div key={rack.shelfId} className="border-2 border-ink bg-white p-3">
+                    <div className="mb-2 border-b border-stone pb-2">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">Rack</p>
+                      <p className="text-[13px] font-extrabold uppercase">{rack.shelfName}</p>
                     </div>
-                  )
-                })}
+                    <div className="space-y-2">
+                      {rack.items.map((item) => {
+                        const selectionKey = transferSelectionKey(rack.shelfId, item.id)
+                        const selection = itemSelections[selectionKey]
+                        const isSelected = Boolean(selection?.selected)
+
+                        return (
+                          <div key={selectionKey} className="border-2 border-ink bg-cream p-3">
+                            <label className="flex cursor-pointer items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleItemSelection(rack.shelfId, item.id)}
+                                className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[12px] font-extrabold uppercase leading-tight">{item.label}</p>
+                                <p className="mt-1 text-[10px] text-[#6B6B6B]">
+                                  Available: <span className="mono font-bold text-ink">{item.available}</span>
+                                </p>
+                              </div>
+                            </label>
+
+                            {isSelected ? (
+                              <div className="mt-3 pl-7">
+                                <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em]">
+                                  Amount to transfer
+                                </p>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  className="brutal-input w-full max-w-[180px] text-center text-[18px] font-bold"
+                                  placeholder="0"
+                                  value={selection.quantity}
+                                  onChange={(event) =>
+                                    updateItemQuantity(rack.shelfId, item.id, event.target.value)
+                                  }
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </section>

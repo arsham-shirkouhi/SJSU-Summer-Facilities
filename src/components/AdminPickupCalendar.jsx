@@ -364,23 +364,17 @@ export default function AdminPickupCalendar({
                     return <div key={dateKey} className="h-[72px] bg-cream sm:h-[78px]" />
                   }
 
-                  const primaryColor = hasEvents
-                    ? getEventColor(parseEventNotes(dayEvents[0].notes).color)
-                    : null
+                  const eventColorDots = getUniqueEventColors(dayEvents)
+                  const visibleDots = eventColorDots.slice(0, 4)
+                  const hiddenDotCount = eventColorDots.length - visibleDots.length
 
                   let cellClass = 'border-[#E8E4DC] bg-white text-ink'
-                  let cellStyle
                   if (isPast && hasEvents) {
-                    cellClass = 'border-[#A8A49C] bg-[#8A8680] text-white'
+                    cellClass = 'border-[#A8A49C] bg-[#ECEAE4] text-ink'
                   } else if (isPast) {
                     cellClass = 'border-[#D4D0C8] bg-[#E4E0D8] text-[#7A7670]'
-                  } else if (hasEvents && primaryColor) {
-                    cellClass = 'border-[1.5px] text-white'
-                    cellStyle = {
-                      backgroundColor: primaryColor.bg,
-                      borderColor: primaryColor.bg,
-                      color: primaryColor.text,
-                    }
+                  } else if (hasEvents) {
+                    cellClass = 'border-[#D4D0C8] bg-[#FAFAF8] text-ink'
                   }
 
                   return (
@@ -388,26 +382,60 @@ export default function AdminPickupCalendar({
                       key={dateKey}
                       type="button"
                       onClick={() => handleDateClick(date)}
-                      style={cellStyle}
-                      className={`relative h-[72px] border text-center sm:h-[78px] ${cellClass} ${isTodayDate ? 'border-[2.5px] border-ink font-extrabold' : 'border-[1.5px]'} ${!hasEvents && !isPast ? 'hover:border-primary hover:bg-[#DCE7FF]' : ''} ${isPast && hasEvents ? 'hover:bg-[#7A7670]' : ''}`}
+                      className={`relative h-[72px] border text-left sm:h-[78px] ${cellClass} ${isTodayDate ? 'border-[2.5px] border-ink font-extrabold' : 'border-[1.5px]'} ${!hasEvents && !isPast ? 'hover:border-primary hover:bg-[#DCE7FF]' : ''} ${hasEvents && !isPast ? 'hover:border-primary hover:bg-[#F0F4FF]' : ''} ${isPast && hasEvents ? 'hover:bg-[#E4E0D8]' : ''}`}
                     >
-                      <div className="flex h-full flex-col items-center justify-center px-1">
-                        <span className="mono text-[14px] font-bold">{format(date, 'd')}</span>
-                        {hasEvents ? <Truck size={10} className="mt-0.5 opacity-90" /> : null}
-                        {dayEvents.slice(0, 2).map((eventEntry) => {
-                          const title = parseEventNotes(eventEntry.notes).title
-                          if (!title) return null
-                          return (
-                            <span
-                              key={eventEntry.id}
-                              className="mt-0.5 max-w-[95%] truncate text-[8px] font-bold uppercase leading-none"
-                            >
-                              {title}
-                            </span>
-                          )
-                        })}
-                        {dayEvents.length > 2 ? (
-                          <span className="mt-0.5 text-[8px] font-bold leading-none">+{dayEvents.length - 2} more</span>
+                      <div className="flex h-full flex-col px-1 py-1">
+                        <div className="flex items-start justify-between gap-0.5">
+                          <span className="mono text-[14px] font-bold leading-none">{format(date, 'd')}</span>
+                          {hasEvents ? (
+                            <div className="flex shrink-0 items-center gap-0.5">
+                              <div className="flex items-center gap-0.5" aria-hidden="true">
+                                {visibleDots.map((color) => (
+                                  <span
+                                    key={color.id}
+                                    className="h-2 w-2 shrink-0 rounded-full border border-ink/25"
+                                    style={{ backgroundColor: color.bg }}
+                                  />
+                                ))}
+                                {hiddenDotCount > 0 ? (
+                                  <span className="text-[7px] font-bold leading-none text-[#6B6B6B]">
+                                    +{hiddenDotCount}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <span
+                                className={`mono rounded-sm border px-1 py-0.5 text-[8px] font-extrabold leading-none ${
+                                  isPast
+                                    ? 'border-[#A8A49C] bg-white text-[#4A4A4A]'
+                                    : 'border-ink bg-ink text-white'
+                                }`}
+                              >
+                                {dayEvents.length}
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {hasEvents ? (
+                          <div className="mt-auto w-full pb-0.5">
+                            {dayEvents.slice(0, 2).map((eventEntry) => {
+                              const title = parseEventNotes(eventEntry.notes).title
+                              if (!title) return null
+                              return (
+                                <p
+                                  key={eventEntry.id}
+                                  className="truncate text-[7px] font-bold uppercase leading-tight sm:text-[8px]"
+                                >
+                                  {title}
+                                </p>
+                              )
+                            })}
+                            {dayEvents.length > 2 ? (
+                              <p className="text-[7px] font-bold leading-tight text-[#6B6B6B] sm:text-[8px]">
+                                +{dayEvents.length - 2} more
+                              </p>
+                            ) : null}
+                          </div>
                         ) : null}
                       </div>
                     </button>
@@ -754,6 +782,18 @@ function startOfDay(date) {
   const next = new Date(date)
   next.setHours(0, 0, 0, 0)
   return next
+}
+
+function getUniqueEventColors(dayEvents) {
+  const seen = new Set()
+  const colors = []
+  for (const entry of dayEvents) {
+    const color = getEventColor(parseEventNotes(entry.notes).color)
+    if (seen.has(color.id)) continue
+    seen.add(color.id)
+    colors.push(color)
+  }
+  return colors
 }
 
 export function ViewHistoryButton({ active = false, onClick, className = '' }) {
