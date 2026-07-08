@@ -5,6 +5,7 @@ import { Navigate, useSearchParams } from 'react-router-dom'
 import TopBar from '../components/TopBar'
 import BottomNav from '../components/BottomNav'
 import { getActiveRackItems, RackDeleteModal, RackFormModal } from '../components/RackSetupModals'
+import { getRoomRackPrefix, getRackDisplayName } from '../lib/rackCodes'
 import { useAuth } from '../context/AuthContext'
 import {
   createRack,
@@ -101,39 +102,45 @@ export default function AdminRacks() {
   }
 
   const openEditModal = (rack) => {
-    const rackItems = getActiveRackItems(rack)
+    const shelfConfigs = (rack.shelves || []).map((shelf) => ({
+      shelfId: shelf.id,
+      shelfLabel: shelf.shelf_label || shelf.name,
+      itemIds: getActiveRackItems(shelf).map((entry) => entry.item_id),
+    }))
     setRackModal({
       mode: 'edit',
       rack,
       initial: {
-        name: rack.name,
-        itemIds: rackItems.map((entry) => entry.item_id),
+        rackCode: rack.rack_code || '',
+        shelfCount: rack.shelves?.length || 1,
+        itemIds: getActiveRackItems(rack).map((entry) => entry.item_id),
+        shelfConfigs,
       },
     })
   }
 
   const closeModal = () => setRackModal(null)
 
-  const handleSaveRack = async ({ name, itemIds }) => {
+  const handleSaveRack = async ({ shelfCount, itemIds, shelfConfigs }) => {
     if (!selectedRoom) return
 
     try {
       setSubmitting(true)
       if (rackModal?.mode === 'edit' && rackModal.rack?.id) {
         await updateRack({
-          shelfId: rackModal.rack.id,
-          name: name.trim(),
-          itemIds,
+          rackUnitId: rackModal.rack.id,
+          shelfConfigs,
+          itemIds: shelfConfigs ? undefined : itemIds,
         })
         toast.success('Rack updated')
       } else {
-        await createRack({
+        const created = await createRack({
           locationId: selectedRoom.id,
           locationName: selectedRoom.name,
-          name: name.trim(),
+          shelfCount,
           itemIds,
         })
-        toast.success('Rack added')
+        toast.success(created?.rack_code ? `Rack added · code ${created.rack_code}` : 'Rack added')
       }
       closeModal()
       await Promise.all([loadRooms(), loadRacks()])
@@ -149,7 +156,7 @@ export default function AdminRacks() {
 
     try {
       setDeleting(true)
-      await deleteRack({ shelfId: confirmDeleteRack.id })
+      await deleteRack({ rackUnitId: confirmDeleteRack.id })
       toast.success('Rack deleted')
       setConfirmDeleteRack(null)
       await Promise.all([loadRooms(), loadRacks()])
@@ -223,12 +230,16 @@ export default function AdminRacks() {
               <h2 className="text-[24px] font-extrabold">{selectedRoom?.name || 'Room'}</h2>
               <p className="text-[12px] uppercase tracking-[0.05em] text-[#6B6B6B]">
                 {racks.length} rack{racks.length === 1 ? '' : 's'} in this room
+                {getRoomRackPrefix(selectedRoom?.name)
+                  ? ` · auto codes ${getRoomRackPrefix(selectedRoom?.name)}01, ${getRoomRackPrefix(selectedRoom?.name)}02...`
+                  : ''}
               </p>
             </div>
             <button
               type="button"
-              className="brutal-btn flex items-center gap-1.5 bg-primary px-3 py-1.5 text-[11px] text-white"
+              className="brutal-btn flex items-center gap-1.5 bg-primary px-3 py-1.5 text-[11px] text-white disabled:opacity-60"
               onClick={openCreateModal}
+              disabled={loadingRacks}
             >
               <Plus size={14} />
               Add Rack
@@ -242,7 +253,7 @@ export default function AdminRacks() {
           <div className="brutal-card bg-white p-4">
             <p className="text-[13px] font-semibold">No racks yet for this room.</p>
             <p className="mt-1 text-[12px] text-[#6B6B6B]">
-              Add a rack name and choose which linen items belong on it.
+              Add racks with auto-assigned codes and assign items to each shelf.
             </p>
             <button
               type="button"
@@ -261,7 +272,10 @@ export default function AdminRacks() {
                   <div className="mb-2 flex items-start justify-between gap-2 border-b-2 border-stone pb-2">
                     <div>
                       <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">Rack</p>
-                      <h3 className="text-[18px] font-extrabold uppercase">{rack.name}</h3>
+                      <h3 className="mono text-[20px] font-extrabold uppercase">{getRackDisplayName(rack)}</h3>
+                      <p className="mt-1 text-[10px] font-semibold uppercase text-[#6B6B6B]">
+                        {(rack.shelves || []).length} shelf{(rack.shelves || []).length === 1 ? '' : 'ves'}
+                      </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -280,7 +294,11 @@ export default function AdminRacks() {
                         <Trash2 size={12} />
                         Delete
                       </button>
-                      <span className="stamp stamp-gray">{rack.qr_slug || 'NO QR'}</span>
+                      {rack.rack_code ? (
+                        <span className="stamp stamp-ink">{rack.rack_code}</span>
+                      ) : (
+                        <span className="stamp stamp-gray">NO CODE</span>
+                      )}
                     </div>
                   </div>
                   {rackItems.length ? (
@@ -314,6 +332,8 @@ export default function AdminRacks() {
         <RackFormModal
           mode={rackModal.mode}
           roomName={selectedRoom?.name}
+          locationId={selectedRoom?.id}
+          refreshKey={racks.length}
           items={items}
           initial={rackModal.initial}
           submitting={submitting}

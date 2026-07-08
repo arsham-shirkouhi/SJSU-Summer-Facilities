@@ -20,9 +20,10 @@ import {
   SkeletonCard,
 } from '../components/Skeleton'
 import BottomNav from '../components/BottomNav'
+import RackCodeView from '../components/RackCodeView'
 import { getActiveRackItems, RackDeleteModal, RackFormModal } from '../components/RackSetupModals'
 import { useAuth } from '../context/AuthContext'
-import { SETTINGS } from '../config/settings'
+import { formatRackCodeInput, getRackDisplayName, isValidRackCode } from '../lib/rackCodes'
 import {
   adjustShelfItemCount,
   createRack,
@@ -31,7 +32,6 @@ import {
   getRackItems,
   getLocationById,
   getLocations,
-  getShelfByCode,
   getShelvesByRoom,
   getStorageRooms,
   transferShelfItemCount,
@@ -71,6 +71,7 @@ export default function Inventory() {
   const [searchParams, setSearchParams] = useSearchParams()
   const roomId = searchParams.get('room')
   const shelfId = searchParams.get('shelf')
+  const rackCode = searchParams.get('code')
 
   const [rooms, setRooms] = useState([])
   const [loading, setLoading] = useState(true)
@@ -86,7 +87,6 @@ export default function Inventory() {
   const [savingCount, setSavingCount] = useState(false)
   const [savedConfirmation, setSavedConfirmation] = useState(null)
   const [showRackCodeModal, setShowRackCodeModal] = useState(false)
-  const [rackCodeSubmitting, setRackCodeSubmitting] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
   const [adminRacks, setAdminRacks] = useState([])
   const [rackItems, setRackItems] = useState([])
@@ -332,6 +332,8 @@ export default function Inventory() {
   }
 
   const openRooms = () => setSearchParams({})
+  const openRackCode = (code) => setSearchParams({ code: formatRackCodeInput(code) })
+  const closeRackCode = () => setSearchParams({})
   const openRoom = (targetRoomId) => setSearchParams({ room: targetRoomId })
   const openShelf = (targetRoomId, targetShelfId) => {
     setSearchParams({ room: targetRoomId, shelf: targetShelfId })
@@ -361,13 +363,19 @@ export default function Inventory() {
   }
 
   const openEditRackModal = (rack) => {
-    const rackItemRows = getActiveRackItems(rack)
+    const shelfConfigs = (rack.shelves || []).map((shelf) => ({
+      shelfId: shelf.id,
+      shelfLabel: shelf.shelf_label || shelf.name,
+      itemIds: getActiveRackItems(shelf).map((entry) => entry.item_id),
+    }))
     setRackModal({
       mode: 'edit',
       rack,
       initial: {
-        name: rack.name,
-        itemIds: rackItemRows.map((entry) => entry.item_id),
+        rackCode: rack.rack_code || '',
+        shelfCount: rack.shelves?.length || 1,
+        itemIds: getActiveRackItems(rack).map((entry) => entry.item_id),
+        shelfConfigs,
       },
     })
   }
@@ -376,26 +384,26 @@ export default function Inventory() {
     await Promise.all([fetchRoomDetail(), loadAdminRacks(), fetchRooms()])
   }
 
-  const handleSaveRack = async ({ name, itemIds }) => {
+  const handleSaveRack = async ({ shelfCount, itemIds, shelfConfigs }) => {
     if (!roomDetail?.roomId) return
 
     try {
       setRackSubmitting(true)
       if (rackModal?.mode === 'edit' && rackModal.rack?.id) {
         await updateRack({
-          shelfId: rackModal.rack.id,
-          name: name.trim(),
-          itemIds,
+          rackUnitId: rackModal.rack.id,
+          shelfConfigs,
+          itemIds: shelfConfigs ? undefined : itemIds,
         })
         toast.success('Rack updated')
       } else {
-        await createRack({
+        const created = await createRack({
           locationId: roomDetail.roomId,
           locationName: roomDetail.roomName,
-          name: name.trim(),
+          shelfCount,
           itemIds,
         })
-        toast.success('Rack added')
+        toast.success(created?.rack_code ? `Rack added · code ${created.rack_code}` : 'Rack added')
       }
       setRackModal(null)
       await refreshRackViews()
@@ -411,7 +419,7 @@ export default function Inventory() {
 
     try {
       setRackDeleting(true)
-      await deleteRack({ shelfId: confirmDeleteRack.id })
+      await deleteRack({ rackUnitId: confirmDeleteRack.id })
       toast.success('Rack deleted')
       setConfirmDeleteRack(null)
       await refreshRackViews()
@@ -421,38 +429,20 @@ export default function Inventory() {
       setRackDeleting(false)
     }
   }
-  const handleRackCodeSubmit = async (rawValue) => {
-    const value = String(rawValue || '').trim()
+
+  const handleRackCodeSubmit = (rawValue) => {
+    const value = formatRackCodeInput(rawValue)
     if (!value) {
       toast.error('Enter a rack code')
       return
     }
-
-    const parsedLink = parseInventoryLink(value)
-    if (parsedLink?.roomId) {
-      setShowRackCodeModal(false)
-      if (parsedLink.shelfId) {
-        openShelf(parsedLink.roomId, parsedLink.shelfId)
-      } else {
-        openRoom(parsedLink.roomId)
-      }
+    if (!isValidRackCode(value)) {
+      toast.error('Use a room rack code like JW01, MS02, OG03, PO01, or SV01')
       return
     }
 
-    try {
-      setRackCodeSubmitting(true)
-      const rack = await getShelfByCode(value)
-      if (!rack) {
-        toast.error('Rack code not found')
-        return
-      }
-      setShowRackCodeModal(false)
-      openShelf(rack.roomId, rack.shelfId)
-    } catch (lookupError) {
-      toast.error(lookupError.message || 'Failed to look up rack code')
-    } finally {
-      setRackCodeSubmitting(false)
-    }
+    setShowRackCodeModal(false)
+    openRackCode(value)
   }
 
   const renderHeader = (eyebrow, title, subtitle, backAction = null, backLabel = '', actions = null) => (
@@ -518,6 +508,30 @@ export default function Inventory() {
     </>
   )
 
+  if (rackCode && !roomId) {
+    return (
+      <div className="min-h-screen bg-cream">
+        <TopBar />
+        <main className="mx-auto w-full max-w-[1024px] px-4 pb-20 pt-20 sm:px-6 md:px-8">
+          {renderHeader(
+            'Inventory',
+            'Rack Lookup',
+            `Code ${rackCode.toUpperCase()}`,
+            closeRackCode,
+            'Back to Rooms',
+          )}
+          <RackCodeView
+            rackCode={rackCode}
+            staffId={user?.id}
+            staffName={profile?.full_name || user?.email || 'Staff'}
+            onBack={closeRackCode}
+          />
+        </main>
+        <BottomNav role={profile?.role} />
+      </div>
+    )
+  }
+
   if (!roomId) {
     return (
       <div className="min-h-screen bg-cream">
@@ -565,11 +579,7 @@ export default function Inventory() {
           )}
         </main>
         {showRackCodeModal ? (
-          <RackCodeModal
-            submitting={rackCodeSubmitting}
-            onClose={() => setShowRackCodeModal(false)}
-            onSubmit={handleRackCodeSubmit}
-          />
+          <RackCodeModal onClose={() => setShowRackCodeModal(false)} onSubmit={handleRackCodeSubmit} />
         ) : null}
         {showTransfer ? (
           <TransferModal
@@ -595,8 +605,9 @@ export default function Inventory() {
         {manageRacksMode ? (
           <button
             type="button"
-            className="brutal-btn flex items-center gap-1.5 bg-primary px-3 py-1.5 text-[11px] text-white"
+            className="brutal-btn flex items-center gap-1.5 bg-primary px-3 py-1.5 text-[11px] text-white disabled:opacity-60"
             onClick={openCreateRackModal}
+            disabled={loadingAdminRacks || detailLoading}
           >
             <Plus size={14} />
             Add Rack
@@ -626,7 +637,7 @@ export default function Inventory() {
               <div className="brutal-card bg-white p-4">
                 <p className="text-[13px] font-semibold">No racks yet for this room.</p>
                 <p className="mt-1 text-[12px] text-[#6B6B6B]">
-                  Add a rack name and choose which linen items belong on it.
+                  Add racks with auto-assigned codes and choose shelf items for each rack.
                 </p>
                 <button
                   type="button"
@@ -645,7 +656,10 @@ export default function Inventory() {
                       <div className="mb-2 flex items-start justify-between gap-2 border-b-2 border-stone pb-2">
                         <div>
                           <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">Rack</p>
-                          <h3 className="text-[18px] font-extrabold uppercase">{rack.name}</h3>
+                          <h3 className="mono text-[20px] font-extrabold uppercase">{getRackDisplayName(rack)}</h3>
+                          <p className="mt-1 text-[10px] font-semibold uppercase text-[#6B6B6B]">
+                            {(rack.shelves || []).length} shelf{(rack.shelves || []).length === 1 ? '' : 'ves'}
+                          </p>
                         </div>
                         <div className="flex items-center gap-2">
                           <button
@@ -744,6 +758,8 @@ export default function Inventory() {
           <RackFormModal
             mode={rackModal.mode}
             roomName={roomDetail?.roomName}
+            locationId={roomId}
+            refreshKey={adminRacks.length}
             items={rackItems}
             initial={rackModal.initial}
             submitting={rackSubmitting}
@@ -890,29 +906,7 @@ export default function Inventory() {
   )
 }
 
-function parseInventoryLink(rawValue) {
-  const value = String(rawValue || '').trim()
-  if (!value) return null
-  try {
-    const parsed = new URL(value)
-    const roomId = parsed.searchParams.get('room')
-    const shelfId = parsed.searchParams.get('shelf')
-    if (!roomId) return null
-    return { roomId, shelfId: shelfId || null }
-  } catch (_error) {
-    try {
-      const parsed = new URL(value, window.location.origin)
-      const roomId = parsed.searchParams.get('room')
-      const shelfId = parsed.searchParams.get('shelf')
-      if (!roomId) return null
-      return { roomId, shelfId: shelfId || null }
-    } catch (_nestedError) {
-      return null
-    }
-  }
-}
-
-function RackCodeModal({ onClose, onSubmit, submitting }) {
+function RackCodeModal({ onClose, onSubmit }) {
   const [code, setCode] = useState('')
 
   const handleSubmit = (event) => {
@@ -935,22 +929,18 @@ function RackCodeModal({ onClose, onSubmit, submitting }) {
 
         <form onSubmit={handleSubmit}>
           <p className="mb-2 text-[11px] font-semibold text-[#6B6B6B]">
-            Type the rack code to jump straight to that rack.
+            Enter the rack label code (JW, MS, OG, PO, or SV + number).
           </p>
           <input
-            className="brutal-input w-full text-[16px] font-bold uppercase"
-            placeholder="e.g. mailroom-rack-a"
+            className="brutal-input w-full text-center text-[28px] font-bold uppercase tracking-[0.2em]"
+            placeholder="JW01"
             value={code}
             autoFocus
-            disabled={submitting}
-            onChange={(event) => setCode(event.target.value)}
+            maxLength={4}
+            onChange={(event) => setCode(formatRackCodeInput(event.target.value))}
           />
-          <button
-            type="submit"
-            disabled={submitting}
-            className="brutal-btn mt-4 w-full bg-primary py-2.5 text-[12px] text-white disabled:opacity-60"
-          >
-            {submitting ? 'Looking up...' : 'Go to Rack →'}
+          <button type="submit" className="brutal-btn mt-4 w-full bg-primary py-2.5 text-[12px] text-white">
+            Go to Rack →
           </button>
         </form>
       </div>
