@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import TopBar from '../components/TopBar'
 import BottomNav from '../components/BottomNav'
-import { getActiveRackItems, RackDeleteModal, RackFormModal } from '../components/RackSetupModals'
+import { getActiveRackItems, CustomItemCreator, RackDeleteModal, RackFormModal } from '../components/RackSetupModals'
 import { getRoomRackPrefix, getRackDisplayName } from '../lib/rackCodes'
 import { useAuth } from '../context/AuthContext'
 import {
@@ -13,6 +13,7 @@ import {
   getAdminRoomRacks,
   getRackItems,
   getStorageRoomsWithRackCounts,
+  isCustomInventoryItem,
   updateRack,
 } from '../lib/queries'
 import { SkeletonBlock, SkeletonCard } from '../components/Skeleton'
@@ -57,6 +58,8 @@ export default function AdminRacks() {
     [rooms],
   )
 
+  const customItems = useMemo(() => items.filter(isCustomInventoryItem), [items])
+
   const loadRooms = async () => {
     try {
       setLoadingRooms(true)
@@ -68,6 +71,11 @@ export default function AdminRacks() {
     } finally {
       setLoadingRooms(false)
     }
+  }
+
+  const reloadItems = async () => {
+    const itemRows = await getRackItems()
+    setItems(itemRows || [])
   }
 
   const loadRacks = async () => {
@@ -189,21 +197,46 @@ export default function AdminRacks() {
           {loadingRooms ? (
             <RoomSkeleton />
           ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {orderedRooms(rooms).map((room) => (
-                <button
-                  key={room.id}
-                  type="button"
-                  onClick={() => openRoom(room.id)}
-                  className="brutal-card bg-white p-4 text-left transition-transform hover:-translate-y-0.5"
-                >
-                  <p className="text-[15px] font-extrabold uppercase leading-tight">{room.name}</p>
-                  <p className="mono mt-2 text-[34px] font-bold leading-none">{room.rack_count}</p>
-                  <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Racks Planned</p>
-                  <p className="mt-2 text-[11px] font-bold uppercase text-primary">Manage Racks →</p>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="mb-4 brutal-card bg-white p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">
+                  Custom Inventory Types
+                </p>
+                <p className="mt-1 text-[12px] text-[#6B6B6B]">
+                  Add item types beyond the 6 standard linen categories, then assign them to racks.
+                </p>
+                {customItems.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {customItems.map((item) => (
+                      <span key={item.id} className="stamp stamp-amber">
+                        {item.label}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[11px] font-semibold text-[#6B6B6B]">No custom types yet.</p>
+                )}
+                <div className="mt-3">
+                  <CustomItemCreator onCreated={reloadItems} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {orderedRooms(rooms).map((room) => (
+                  <button
+                    key={room.id}
+                    type="button"
+                    onClick={() => openRoom(room.id)}
+                    className="brutal-card bg-white p-4 text-left transition-transform hover:-translate-y-0.5"
+                  >
+                    <p className="text-[15px] font-extrabold uppercase leading-tight">{room.name}</p>
+                    <p className="mono mt-2 text-[34px] font-bold leading-none">{room.rack_count}</p>
+                    <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Racks Planned</p>
+                    <p className="mt-2 text-[11px] font-bold uppercase text-primary">Manage Racks →</p>
+                  </button>
+                ))}
+              </div>
+            </>
           )}
         </main>
         <BottomNav role="admin" />
@@ -337,6 +370,8 @@ export default function AdminRacks() {
           items={items}
           initial={rackModal.initial}
           submitting={submitting}
+          allowCustomItems
+          onItemsReload={reloadItems}
           onClose={closeModal}
           onSubmit={handleSaveRack}
         />

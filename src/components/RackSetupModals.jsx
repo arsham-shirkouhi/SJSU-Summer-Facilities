@@ -1,11 +1,89 @@
 import { useEffect, useState } from 'react'
+import toast from 'react-hot-toast'
 import { getRoomRackPrefix } from '../lib/rackCodes'
-import { getNextRackCodeForRoom } from '../lib/queries'
+import { createCustomItem, getNextRackCodeForRoom, isCustomInventoryItem } from '../lib/queries'
 
 export const getActiveRackItems = (rack) =>
   (rack?.shelf_items || [])
     .filter((entry) => entry.is_active !== false)
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+
+function ItemPickerOption({ item, selected, onToggle }) {
+  const custom = isCustomInventoryItem(item)
+
+  return (
+    <label
+      className={`cursor-pointer border-2 px-3 py-2 text-[11px] font-bold uppercase ${
+        selected ? 'border-ink bg-primary text-white' : 'border-ink bg-white text-ink'
+      }`}
+    >
+      <input type="checkbox" className="sr-only" checked={selected} onChange={onToggle} />
+      <span className="flex items-center justify-between gap-2">
+        <span>{item.label}</span>
+        {custom ? (
+          <span
+            className={`rounded-sm px-1.5 py-0.5 text-[8px] tracking-[0.08em] ${
+              selected ? 'bg-white/20 text-white' : 'bg-amber text-ink'
+            }`}
+          >
+            Custom
+          </span>
+        ) : null}
+      </span>
+    </label>
+  )
+}
+
+export function CustomItemCreator({ onCreated, disabled }) {
+  const [label, setLabel] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    if (!label.trim()) {
+      toast.error('Enter a name for the custom item')
+      return
+    }
+
+    try {
+      setSaving(true)
+      const item = await createCustomItem(label)
+      setLabel('')
+      onCreated?.(item)
+      toast.success(`Added custom item · ${item.label}`)
+    } catch (error) {
+      toast.error(error.message || 'Failed to add custom item')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="border-2 border-dashed border-ink bg-white p-3">
+      <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em]">Add Custom Item Type</p>
+      <p className="mb-2 text-[10px] text-[#6B6B6B]">
+        Create a new inventory type beyond the 6 standard linen items.
+      </p>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          className="brutal-input flex-1"
+          placeholder="e.g. Mattress Pads"
+          value={label}
+          maxLength={60}
+          disabled={disabled || saving}
+          onChange={(event) => setLabel(event.target.value)}
+        />
+        <button
+          type="submit"
+          disabled={disabled || saving}
+          className="brutal-btn bg-amber px-3 py-2 text-[11px] disabled:opacity-60"
+        >
+          {saving ? 'Adding...' : 'Add Type'}
+        </button>
+      </div>
+    </form>
+  )
+}
 
 function ShelfItemPicker({ shelfLabel, itemIds, items, onChange }) {
   const toggleItem = (itemId) => {
@@ -21,20 +99,12 @@ function ShelfItemPicker({ shelfLabel, itemIds, items, onChange }) {
         {items.map((item) => {
           const selected = itemIds.includes(item.id)
           return (
-            <label
+            <ItemPickerOption
               key={item.id}
-              className={`cursor-pointer border-2 px-3 py-2 text-[11px] font-bold uppercase ${
-                selected ? 'border-ink bg-primary text-white' : 'border-ink bg-white text-ink'
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="sr-only"
-                checked={selected}
-                onChange={() => toggleItem(item.id)}
-              />
-              {item.label}
-            </label>
+              item={item}
+              selected={selected}
+              onToggle={() => toggleItem(item.id)}
+            />
           )
         })}
       </div>
@@ -50,6 +120,8 @@ export function RackFormModal({
   items,
   initial,
   submitting,
+  allowCustomItems = false,
+  onItemsReload,
   onClose,
   onSubmit,
 }) {
@@ -104,6 +176,40 @@ export function RackFormModal({
     )
   }
 
+  const handleCustomItemCreated = async (item) => {
+    await onItemsReload?.()
+    if (mode === 'create') {
+      setItemIds((current) => (current.includes(item.id) ? current : [...current, item.id]))
+    }
+  }
+
+  const itemPickerSections = (
+    <>
+      <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {items.map((item) => {
+          const selected = itemIds.includes(item.id)
+          return (
+            <ItemPickerOption
+              key={item.id}
+              item={item}
+              selected={selected}
+              onToggle={() =>
+                setItemIds((current) =>
+                  current.includes(item.id)
+                    ? current.filter((id) => id !== item.id)
+                    : [...current, item.id],
+                )
+              }
+            />
+          )
+        })}
+      </div>
+      {allowCustomItems ? (
+        <CustomItemCreator onCreated={handleCustomItemCreated} disabled={submitting} />
+      ) : null}
+    </>
+  )
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
       <div className="brutal-card max-h-[90vh] w-full max-w-[640px] overflow-y-auto bg-white p-5">
@@ -151,33 +257,7 @@ export function RackFormModal({
               <p className="mb-3 text-[11px] text-[#6B6B6B]">
                 New racks start with these items on the bottom shelf. Edit each shelf after saving.
               </p>
-              <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {items.map((item) => {
-                  const selected = itemIds.includes(item.id)
-                  return (
-                    <label
-                      key={item.id}
-                      className={`cursor-pointer border-2 px-3 py-2 text-[11px] font-bold uppercase ${
-                        selected ? 'border-ink bg-primary text-white' : 'border-ink bg-white text-ink'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="sr-only"
-                        checked={selected}
-                        onChange={() =>
-                          setItemIds((current) =>
-                            current.includes(item.id)
-                              ? current.filter((id) => id !== item.id)
-                              : [...current, item.id],
-                          )
-                        }
-                      />
-                      {item.label}
-                    </label>
-                  )
-                })}
-              </div>
+              {itemPickerSections}
             </>
           ) : shelfConfigs.length ? (
             <>
@@ -194,37 +274,14 @@ export function RackFormModal({
                   onChange={(nextItemIds) => updateShelfItems(config.shelfId, nextItemIds)}
                 />
               ))}
+              {allowCustomItems ? (
+                <CustomItemCreator onCreated={handleCustomItemCreated} disabled={submitting} />
+              ) : null}
             </>
           ) : (
             <>
               <p className="mb-2 text-[10px] font-bold uppercase">Assign Items To This Rack</p>
-              <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {items.map((item) => {
-                  const selected = itemIds.includes(item.id)
-                  return (
-                    <label
-                      key={item.id}
-                      className={`cursor-pointer border-2 px-3 py-2 text-[11px] font-bold uppercase ${
-                        selected ? 'border-ink bg-primary text-white' : 'border-ink bg-white text-ink'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="sr-only"
-                        checked={selected}
-                        onChange={() =>
-                          setItemIds((current) =>
-                            current.includes(item.id)
-                              ? current.filter((id) => id !== item.id)
-                              : [...current, item.id],
-                          )
-                        }
-                      />
-                      {item.label}
-                    </label>
-                  )
-                })}
-              </div>
+              {itemPickerSections}
             </>
           )}
 

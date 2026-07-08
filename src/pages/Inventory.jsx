@@ -20,7 +20,6 @@ import {
   SkeletonCard,
 } from '../components/Skeleton'
 import BottomNav from '../components/BottomNav'
-import RackCodeView from '../components/RackCodeView'
 import { getActiveRackItems, RackDeleteModal, RackFormModal } from '../components/RackSetupModals'
 import { useAuth } from '../context/AuthContext'
 import { formatRackCodeInput, getRackDisplayName, isValidRackCode } from '../lib/rackCodes'
@@ -32,6 +31,7 @@ import {
   getRackItems,
   getLocationById,
   getLocations,
+  getRackUnitByCode,
   getShelvesByRoom,
   getStorageRooms,
   transferShelfItemCount,
@@ -71,7 +71,6 @@ export default function Inventory() {
   const [searchParams, setSearchParams] = useSearchParams()
   const roomId = searchParams.get('room')
   const shelfId = searchParams.get('shelf')
-  const rackCode = searchParams.get('code')
 
   const [rooms, setRooms] = useState([])
   const [loading, setLoading] = useState(true)
@@ -87,6 +86,7 @@ export default function Inventory() {
   const [savingCount, setSavingCount] = useState(false)
   const [savedConfirmation, setSavedConfirmation] = useState(null)
   const [showRackCodeModal, setShowRackCodeModal] = useState(false)
+  const [rackCodeSubmitting, setRackCodeSubmitting] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
   const [adminRacks, setAdminRacks] = useState([])
   const [rackItems, setRackItems] = useState([])
@@ -220,6 +220,11 @@ export default function Inventory() {
     }
   }
 
+  const reloadRackItems = async () => {
+    const items = await getRackItems()
+    setRackItems(items || [])
+  }
+
   useEffect(() => {
     if (manageRacksMode && roomId) {
       loadAdminRacks()
@@ -332,8 +337,6 @@ export default function Inventory() {
   }
 
   const openRooms = () => setSearchParams({})
-  const openRackCode = (code) => setSearchParams({ code: formatRackCodeInput(code) })
-  const closeRackCode = () => setSearchParams({})
   const openRoom = (targetRoomId) => setSearchParams({ room: targetRoomId })
   const openShelf = (targetRoomId, targetShelfId) => {
     setSearchParams({ room: targetRoomId, shelf: targetShelfId })
@@ -430,7 +433,7 @@ export default function Inventory() {
     }
   }
 
-  const handleRackCodeSubmit = (rawValue) => {
+  const handleRackCodeSubmit = async (rawValue) => {
     const value = formatRackCodeInput(rawValue)
     if (!value) {
       toast.error('Enter a rack code')
@@ -441,8 +444,29 @@ export default function Inventory() {
       return
     }
 
-    setShowRackCodeModal(false)
-    openRackCode(value)
+    try {
+      setRackCodeSubmitting(true)
+      const rack = await getRackUnitByCode(value)
+      if (!rack?.roomId) {
+        toast.error('Rack code not found')
+        return
+      }
+
+      const targetShelf = [...(rack.shelves || [])].sort(
+        (a, b) => Number(a.shelf_level || 1) - Number(b.shelf_level || 1),
+      )[0]
+      if (!targetShelf?.id) {
+        toast.error('Rack has no shelves to count')
+        return
+      }
+
+      setShowRackCodeModal(false)
+      openShelf(rack.roomId, targetShelf.id)
+    } catch (lookupError) {
+      toast.error(lookupError.message || 'Failed to look up rack code')
+    } finally {
+      setRackCodeSubmitting(false)
+    }
   }
 
   const renderHeader = (eyebrow, title, subtitle, backAction = null, backLabel = '', actions = null) => (
@@ -508,30 +532,6 @@ export default function Inventory() {
     </>
   )
 
-  if (rackCode && !roomId) {
-    return (
-      <div className="min-h-screen bg-cream">
-        <TopBar />
-        <main className="mx-auto w-full max-w-[1024px] px-4 pb-20 pt-20 sm:px-6 md:px-8">
-          {renderHeader(
-            'Inventory',
-            'Rack Lookup',
-            `Code ${rackCode.toUpperCase()}`,
-            closeRackCode,
-            'Back to Rooms',
-          )}
-          <RackCodeView
-            rackCode={rackCode}
-            staffId={user?.id}
-            staffName={profile?.full_name || user?.email || 'Staff'}
-            onBack={closeRackCode}
-          />
-        </main>
-        <BottomNav role={profile?.role} />
-      </div>
-    )
-  }
-
   if (!roomId) {
     return (
       <div className="min-h-screen bg-cream">
@@ -579,7 +579,11 @@ export default function Inventory() {
           )}
         </main>
         {showRackCodeModal ? (
-          <RackCodeModal onClose={() => setShowRackCodeModal(false)} onSubmit={handleRackCodeSubmit} />
+          <RackCodeModal
+            onClose={() => setShowRackCodeModal(false)}
+            onSubmit={handleRackCodeSubmit}
+            submitting={rackCodeSubmitting}
+          />
         ) : null}
         {showTransfer ? (
           <TransferModal
@@ -763,6 +767,8 @@ export default function Inventory() {
             items={rackItems}
             initial={rackModal.initial}
             submitting={rackSubmitting}
+            allowCustomItems={isAdmin}
+            onItemsReload={reloadRackItems}
             onClose={() => setRackModal(null)}
             onSubmit={handleSaveRack}
           />
@@ -906,7 +912,7 @@ export default function Inventory() {
   )
 }
 
-function RackCodeModal({ onClose, onSubmit }) {
+function RackCodeModal({ onClose, onSubmit, submitting }) {
   const [code, setCode] = useState('')
 
   const handleSubmit = (event) => {
@@ -922,7 +928,12 @@ function RackCodeModal({ onClose, onSubmit }) {
             <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Inventory</p>
             <p className="text-[18px] font-extrabold uppercase">Enter Rack Code</p>
           </div>
-          <button type="button" className="brutal-btn bg-white px-3 py-1.5 text-[11px]" onClick={onClose}>
+          <button
+            type="button"
+            className="brutal-btn bg-white px-3 py-1.5 text-[11px]"
+            onClick={onClose}
+            disabled={submitting}
+          >
             Close ✕
           </button>
         </div>
@@ -937,10 +948,15 @@ function RackCodeModal({ onClose, onSubmit }) {
             value={code}
             autoFocus
             maxLength={4}
+            disabled={submitting}
             onChange={(event) => setCode(formatRackCodeInput(event.target.value))}
           />
-          <button type="submit" className="brutal-btn mt-4 w-full bg-primary py-2.5 text-[12px] text-white">
-            Go to Rack →
+          <button
+            type="submit"
+            disabled={submitting}
+            className="brutal-btn mt-4 w-full bg-primary py-2.5 text-[12px] text-white disabled:opacity-60"
+          >
+            {submitting ? 'Looking up...' : 'Go to Rack →'}
           </button>
         </form>
       </div>
@@ -952,95 +968,135 @@ function transferSelectionKey(shelfId, itemId) {
   return `${shelfId}:${itemId}`
 }
 
+function resolveDestinationShelf(rack, itemId) {
+  const shelves = [...(rack?.shelves || [])].sort(
+    (a, b) => Number(a.shelf_level || 1) - Number(b.shelf_level || 1),
+  )
+  if (!shelves.length) return null
+
+  const matching = shelves.filter((shelf) =>
+    (shelf.shelf_items || []).some(
+      (entry) => entry.item_id === itemId && entry.is_active !== false,
+    ),
+  )
+  return matching[0] || shelves[0]
+}
+
+function buildRackTransferItems(rack) {
+  if (!rack) return []
+
+  const items = []
+  for (const shelf of rack.shelves || []) {
+    const itemLabelById = new Map(
+      (shelf.shelf_items || []).map((entry) => [
+        entry.item_id,
+        entry.items?.label || entry.items?.name || 'Item',
+      ]),
+    )
+    const itemNameById = new Map(
+      (shelf.shelf_items || []).map((entry) => [entry.item_id, entry.items?.name || '']),
+    )
+
+    for (const balance of shelf.balances || []) {
+      const available = Number(balance.current_balance || 0)
+      if (available <= 0) continue
+      items.push({
+        shelfId: shelf.id,
+        shelfLabel: shelf.shelf_label || shelf.name,
+        id: balance.item_id,
+        name: balance.items?.name || itemNameById.get(balance.item_id) || '',
+        label:
+          balance.items?.label || itemLabelById.get(balance.item_id) || balance.items?.name || 'Item',
+        available,
+      })
+    }
+  }
+
+  return items.sort((a, b) => a.label.localeCompare(b.label))
+}
+
 function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
   const [submitting, setSubmitting] = useState(false)
 
   const [fromRoomId, setFromRoomId] = useState('')
+  const [fromRackId, setFromRackId] = useState('')
   const [toRoomId, setToRoomId] = useState('')
-  const [toShelfId, setToShelfId] = useState('')
+  const [toRackId, setToRackId] = useState('')
   const [itemSelections, setItemSelections] = useState({})
 
-  const [fromShelves, setFromShelves] = useState([])
-  const [toShelves, setToShelves] = useState([])
-  const [loadingFromShelves, setLoadingFromShelves] = useState(false)
-  const [loadingToShelves, setLoadingToShelves] = useState(false)
+  const [fromRacks, setFromRacks] = useState([])
+  const [toRacks, setToRacks] = useState([])
+  const [loadingFromRacks, setLoadingFromRacks] = useState(false)
+  const [loadingToRacks, setLoadingToRacks] = useState(false)
 
   useEffect(() => {
     if (!fromRoomId) {
-      setFromShelves([])
+      setFromRacks([])
+      setFromRackId('')
       setItemSelections({})
       return
     }
-    const loadFromShelves = async () => {
+
+    const loadFromRacks = async () => {
       try {
-        setLoadingFromShelves(true)
-        const shelves = await getShelvesByRoom(fromRoomId)
-        setFromShelves(shelves || [])
+        setLoadingFromRacks(true)
+        const racks = await getAdminRoomRacks(fromRoomId)
+        setFromRacks(racks || [])
+        setFromRackId('')
         setItemSelections({})
       } catch (loadError) {
         toast.error(loadError.message || 'Failed to load source racks')
       } finally {
-        setLoadingFromShelves(false)
+        setLoadingFromRacks(false)
       }
     }
-    loadFromShelves()
+    loadFromRacks()
   }, [fromRoomId])
 
   useEffect(() => {
     if (!toRoomId) {
-      setToShelves([])
-      setToShelfId('')
+      setToRacks([])
+      setToRackId('')
       return
     }
-    const loadToShelves = async () => {
+
+    const loadToRacks = async () => {
       try {
-        setLoadingToShelves(true)
-        const shelves = await getShelvesByRoom(toRoomId)
-        setToShelves(shelves || [])
-        setToShelfId('')
+        setLoadingToRacks(true)
+        const racks = await getAdminRoomRacks(toRoomId)
+        setToRacks(racks || [])
+        setToRackId('')
       } catch (loadError) {
         toast.error(loadError.message || 'Failed to load destination racks')
       } finally {
-        setLoadingToShelves(false)
+        setLoadingToRacks(false)
       }
     }
-    loadToShelves()
+    loadToRacks()
   }, [toRoomId])
 
-  const racksWithStock = useMemo(() => {
-    if (!fromShelves.length) return []
+  const selectedFromRack = useMemo(
+    () => fromRacks.find((rack) => rack.id === fromRackId) || null,
+    [fromRacks, fromRackId],
+  )
 
-    return fromShelves
-      .map((shelf) => ({
-        shelfId: shelf.id,
-        shelfName: shelf.name,
-        items: (shelf.balances || [])
-          .filter((entry) => Number(entry.current_balance || 0) > 0)
-          .map((entry) => ({
-            id: entry.item_id,
-            name: entry.items?.name,
-            label: entry.items?.label || entry.items?.name || 'Item',
-            available: Number(entry.current_balance || 0),
-          }))
-          .sort((a, b) => a.label.localeCompare(b.label)),
-      }))
-      .filter((group) => group.items.length > 0)
-      .sort((a, b) => a.shelfName.localeCompare(b.shelfName))
-  }, [fromShelves])
+  const selectedToRack = useMemo(
+    () => toRacks.find((rack) => rack.id === toRackId) || null,
+    [toRacks, toRackId],
+  )
+
+  const rackTransferItems = useMemo(
+    () => buildRackTransferItems(selectedFromRack),
+    [selectedFromRack],
+  )
 
   const transferItemLookup = useMemo(() => {
     const lookup = new Map()
-    for (const rack of racksWithStock) {
-      for (const item of rack.items) {
-        lookup.set(transferSelectionKey(rack.shelfId, item.id), {
-          ...item,
-          shelfId: rack.shelfId,
-          shelfName: rack.shelfName,
-        })
-      }
+    for (const item of rackTransferItems) {
+      lookup.set(transferSelectionKey(item.shelfId, item.id), item)
     }
     return lookup
-  }, [racksWithStock])
+  }, [rackTransferItems])
 
   const selectedTransferItems = useMemo(
     () =>
@@ -1051,7 +1107,7 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
           return {
             selectionKey,
             shelfId: item?.shelfId,
-            shelfName: item?.shelfName || 'Rack',
+            shelfLabel: item?.shelfLabel || 'Shelf',
             itemId: item?.id,
             quantity: Number(selection.quantity),
             name: item?.name,
@@ -1088,21 +1144,35 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
   }
 
   const handleTransfer = async () => {
-    if (!fromRoomId || !toRoomId || !toShelfId) {
-      toast.error('Select source room, destination room, and destination rack')
+    if (!fromRoomId || !fromRackId || !toRoomId || !toRackId) {
+      toast.error('Select source and destination racks')
+      return
+    }
+    if (fromRoomId === toRoomId && fromRackId === toRackId) {
+      toast.error('Source and destination racks must be different')
       return
     }
     if (!selectedTransferItems.length) {
       toast.error('Select at least one item and enter an amount')
       return
     }
+    if (!selectedToRack) {
+      toast.error('Select a destination rack')
+      return
+    }
 
     for (const item of selectedTransferItems) {
       if (item.quantity > item.available) {
-        toast.error(`Only ${item.available} ${item.label} available on ${item.shelfName}`)
+        toast.error(`Only ${item.available} ${item.label} available on ${item.shelfLabel}`)
         return
       }
-      if (fromRoomId === toRoomId && item.shelfId === toShelfId) {
+
+      const destinationShelf = resolveDestinationShelf(selectedToRack, item.itemId)
+      if (!destinationShelf?.id) {
+        toast.error(`${getRackDisplayName(selectedToRack)} has no shelf for ${item.label}`)
+        return
+      }
+      if (item.shelfId === destinationShelf.id) {
         toast.error(`${item.label} is already on the destination rack`)
         return
       }
@@ -1111,10 +1181,11 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
     setSubmitting(true)
     try {
       for (const item of selectedTransferItems) {
+        const destinationShelf = resolveDestinationShelf(selectedToRack, item.itemId)
         await transferShelfItemCount({
           fromShelfId: item.shelfId,
           fromLocationId: fromRoomId,
-          toShelfId,
+          toShelfId: destinationShelf.id,
           toLocationId: toRoomId,
           itemId: item.itemId,
           quantity: item.quantity,
@@ -1138,7 +1209,7 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
         <div className="mb-4 flex items-center justify-between border-b-[2.5px] border-ink pb-2">
           <div>
             <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">Inventory</p>
-            <p className="text-[18px] font-extrabold uppercase">Transfer Stock</p>
+            <p className="text-[18px] font-extrabold uppercase">Rack Transfer</p>
           </div>
           <button type="button" className="brutal-btn bg-white px-3 py-1.5 text-[11px]" onClick={onClose}>
             Close ✕
@@ -1147,26 +1218,44 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
 
         <div className="space-y-4">
           <section className="border-2 border-ink bg-cream p-3">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">From</p>
-            <select
-              className="brutal-input"
-              value={fromRoomId}
-              onChange={(event) => setFromRoomId(event.target.value)}
-            >
-              <option value="">Select room</option>
-              {rooms.map((room) => (
-                <option key={room.id} value={room.id}>
-                  {room.name}
-                </option>
-              ))}
-            </select>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">From Rack</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <select
+                className="brutal-input"
+                value={fromRoomId}
+                onChange={(event) => setFromRoomId(event.target.value)}
+              >
+                <option value="">Select room</option>
+                {rooms.map((room) => (
+                  <option key={room.id} value={room.id}>
+                    {room.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="brutal-input"
+                value={fromRackId}
+                onChange={(event) => {
+                  setFromRackId(event.target.value)
+                  setItemSelections({})
+                }}
+                disabled={!fromRoomId || loadingFromRacks}
+              >
+                <option value="">Select rack</option>
+                {fromRacks.map((rack) => (
+                  <option key={rack.id} value={rack.id}>
+                    {getRackDisplayName(rack)}
+                  </option>
+                ))}
+              </select>
+            </div>
             <p className="mt-2 text-[10px] font-semibold text-[#6B6B6B]">
-              Pick items from one or more racks below.
+              Choose the rack you are moving stock from.
             </p>
           </section>
 
           <section className="border-2 border-ink bg-cream p-3">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">To</p>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">To Rack</p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <select
                 className="brutal-input"
@@ -1182,82 +1271,80 @@ function TransferModal({ rooms, staffId, staffName, onClose, onSuccess }) {
               </select>
               <select
                 className="brutal-input"
-                value={toShelfId}
-                onChange={(event) => setToShelfId(event.target.value)}
-                disabled={!toRoomId || loadingToShelves}
+                value={toRackId}
+                onChange={(event) => setToRackId(event.target.value)}
+                disabled={!toRoomId || loadingToRacks}
               >
                 <option value="">Select rack</option>
-                {toShelves.map((shelf) => (
-                  <option key={shelf.id} value={shelf.id}>
-                    {shelf.name}
+                {toRacks.map((rack) => (
+                  <option key={rack.id} value={rack.id}>
+                    {getRackDisplayName(rack)}
                   </option>
                 ))}
               </select>
             </div>
+            {selectedToRack ? (
+              <p className="mt-2 text-[10px] font-semibold text-[#6B6B6B]">
+                Stock goes to the matching shelf on {getRackDisplayName(selectedToRack)}.
+              </p>
+            ) : null}
           </section>
 
           <section>
             <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.08em]">Items to Transfer</p>
-            {!fromRoomId ? (
-              <p className="text-[11px] font-semibold text-[#6B6B6B]">Select a source room first.</p>
-            ) : loadingFromShelves ? (
-              <p className="text-[11px] font-semibold text-[#6B6B6B]">Loading racks...</p>
-            ) : !racksWithStock.length ? (
-              <p className="text-[11px] font-semibold text-[#6B6B6B]">No stock available in this room.</p>
+            {!fromRackId ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">Select a source rack first.</p>
+            ) : loadingFromRacks ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">Loading rack stock...</p>
+            ) : !rackTransferItems.length ? (
+              <p className="text-[11px] font-semibold text-[#6B6B6B]">
+                No stock available on {getRackDisplayName(selectedFromRack)}.
+              </p>
             ) : (
-              <div className="space-y-3">
-                {racksWithStock.map((rack) => (
-                  <div key={rack.shelfId} className="border-2 border-ink bg-white p-3">
-                    <div className="mb-2 border-b border-stone pb-2">
-                      <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#6B6B6B]">Rack</p>
-                      <p className="text-[13px] font-extrabold uppercase">{rack.shelfName}</p>
-                    </div>
-                    <div className="space-y-2">
-                      {rack.items.map((item) => {
-                        const selectionKey = transferSelectionKey(rack.shelfId, item.id)
-                        const selection = itemSelections[selectionKey]
-                        const isSelected = Boolean(selection?.selected)
+              <div className="space-y-2">
+                {rackTransferItems.map((item) => {
+                  const selectionKey = transferSelectionKey(item.shelfId, item.id)
+                  const selection = itemSelections[selectionKey]
+                  const isSelected = Boolean(selection?.selected)
 
-                        return (
-                          <div key={selectionKey} className="border-2 border-ink bg-cream p-3">
-                            <label className="flex cursor-pointer items-start gap-3">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleItemSelection(rack.shelfId, item.id)}
-                                className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <p className="text-[12px] font-extrabold uppercase leading-tight">{item.label}</p>
-                                <p className="mt-1 text-[10px] text-[#6B6B6B]">
-                                  Available: <span className="mono font-bold text-ink">{item.available}</span>
-                                </p>
-                              </div>
-                            </label>
+                  return (
+                    <div key={selectionKey} className="border-2 border-ink bg-white p-3">
+                      <label className="flex cursor-pointer items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleItemSelection(item.shelfId, item.id)}
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[12px] font-extrabold uppercase leading-tight">{item.label}</p>
+                          <p className="mt-1 text-[10px] text-[#6B6B6B]">
+                            On {item.shelfLabel} · Available:{' '}
+                            <span className="mono font-bold text-ink">{item.available}</span>
+                          </p>
+                        </div>
+                      </label>
 
-                            {isSelected ? (
-                              <div className="mt-3 pl-7">
-                                <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em]">
-                                  Amount to transfer
-                                </p>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  className="brutal-input w-full max-w-[180px] text-center text-[18px] font-bold"
-                                  placeholder="0"
-                                  value={selection.quantity}
-                                  onChange={(event) =>
-                                    updateItemQuantity(rack.shelfId, item.id, event.target.value)
-                                  }
-                                />
-                              </div>
-                            ) : null}
-                          </div>
-                        )
-                      })}
+                      {isSelected ? (
+                        <div className="mt-3 pl-7">
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em]">
+                            Amount to transfer
+                          </p>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            className="brutal-input w-full max-w-[180px] text-center text-[18px] font-bold"
+                            placeholder="0"
+                            value={selection.quantity}
+                            onChange={(event) =>
+                              updateItemQuantity(item.shelfId, item.id, event.target.value)
+                            }
+                          />
+                        </div>
+                      ) : null}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </section>

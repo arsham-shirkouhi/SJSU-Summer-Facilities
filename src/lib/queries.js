@@ -354,10 +354,87 @@ export async function getItems() {
   }
 }
 
+export function clearItemsCache() {
+  cachedItems = null
+}
+
+const STANDARD_RACK_ITEM_NAMES = new Set(SETTINGS.rackItems.map((item) => item.key))
+
+export function isCustomInventoryItem(item) {
+  if (!item?.name) return false
+  return !STANDARD_RACK_ITEM_NAMES.has(item.name)
+}
+
+function buildCustomItemName(label, suffix = '') {
+  const slug = String(label || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40)
+  const base = slug ? `custom_${slug}` : 'custom_item'
+  return suffix ? `${base}_${suffix}` : base
+}
+
+export async function createCustomItem(label) {
+  const cleanLabel = String(label || '').trim()
+  if (!cleanLabel) {
+    throw new Error('Item name is required.')
+  }
+  if (cleanLabel.length > 60) {
+    throw new Error('Item name must be 60 characters or less.')
+  }
+
+  const reservedLabels = new Set(
+    SETTINGS.rackItems.map((item) => String(item.label || '').trim().toLowerCase()),
+  )
+  if (reservedLabels.has(cleanLabel.toLowerCase())) {
+    throw new Error('That name is already used by a standard linen type.')
+  }
+
+  const existingItems = await getItems()
+  if (
+    existingItems.some((item) => String(item.label || '').trim().toLowerCase() === cleanLabel.toLowerCase())
+  ) {
+    throw new Error('An item with that name already exists.')
+  }
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const name = buildCustomItemName(cleanLabel, attempt ? String(attempt) : '')
+    const { data, error } = await withTimeout(
+      supabase
+        .from('items')
+        .insert({
+          name,
+          label: cleanLabel,
+          is_active: true,
+        })
+        .select('id,name,label')
+        .single(),
+    )
+
+    if (!error) {
+      clearItemsCache()
+      return data
+    }
+    if (error.code === '42501' || /policy|permission|row-level security/i.test(error.message || '')) {
+      throw new Error(
+        'Could not save custom item to the database. Run migration 018_custom_items.sql in Supabase.',
+      )
+    }
+    if (error.code !== '23505') throw error
+  }
+
+  throw new Error('Could not create that custom item. Try a different name.')
+}
+
 export async function getRackItems() {
   const allItems = await getItems()
   const byName = Object.fromEntries(allItems.map((item) => [item.name, item]))
-  return SETTINGS.rackItems.map((config) => byName[config.key]).filter(Boolean)
+  const standard = SETTINGS.rackItems.map((config) => byName[config.key]).filter(Boolean)
+  const standardNames = new Set(SETTINGS.rackItems.map((config) => config.key))
+  const custom = allItems.filter((item) => !standardNames.has(item.name))
+  return [...standard, ...custom]
 }
 
 export async function getShelvesByRoom(locationId) {
@@ -481,20 +558,15 @@ function buildShelfRows(shelf) {
   }
 }
 
-async function fetchRackUnitShelves(rackUnitId, locationId) {
-  let shelvesQuery = supabase
-    .from('shelves')
-    .select('id,name,rack_unit_id,shelf_level,shelf_label,qr_slug')
-    .eq('rack_unit_id', rackUnitId)
-    .order('shelf_level', { ascending: true })
-    .limit(20)
+const LEGACY_SHELF_SELECT = 'id,name,qr_slug,location_id'
+const FULL_SHELF_SELECT = `${LEGACY_SHELF_SELECT},rack_unit_id,shelf_level,shelf_label`
 
-  let { data: shelves, error: shelvesError } = await withTimeout(shelvesQuery.eq('is_active', true))
-  if (shelvesError && /is_active|column|rack_unit_id|relationship/.test(shelvesError.message || '')) {
-    ; ({ data: shelves, error: shelvesError } = await withTimeout(shelvesQuery))
-  }
-  if (shelvesError) throw shelvesError
+function isMissingRackUnitColumnError(error) {
+  const message = String(error?.message || '').toLowerCase()
+  return /rack_unit_id|shelf_level|shelf_label|rack_units|relation|schema cache/.test(message)
+}
 
+async function attachShelfItemsAndBalances(shelves, locationId) {
   const shelfIds = (shelves || []).map((shelf) => shelf.id)
   if (!shelfIds.length) return []
 
@@ -543,20 +615,262 @@ async function fetchRackUnitShelves(rackUnitId, locationId) {
   }))
 }
 
+async function queryShelvesByLocationPrefix(locationId, prefix, select = FULL_SHELF_SELECT) {
+  const runQuery = (fields, activeOnly) => {
+    let query = supabase
+      .from('shelves')
+      .select(fields)
+      .eq('location_id', locationId)
+      .ilike('name', `${prefix}%`)
+      .order('name', { ascending: true })
+      .limit(20)
+    if (activeOnly) query = query.eq('is_active', true)
+    return withTimeout(query)
+  }
+
+  let { data, error } = await runQuery(select, true)
+  if (error && /is_active|column|rack_unit_id|shelf_level|shelf_label/.test(error.message || '')) {
+    ;({ data, error } = await runQuery(select, false))
+  }
+  if (error && /column|rack_unit_id|shelf_level|shelf_label/.test(error.message || '')) {
+    ;({ data, error } = await runQuery(LEGACY_SHELF_SELECT, true))
+  }
+  if (error && /is_active|column/.test(error.message || '')) {
+    ;({ data, error } = await runQuery(LEGACY_SHELF_SELECT, false))
+  }
+  if (error) throw error
+  return data || []
+}
+
+async function fetchShelvesForRackCode(locationId, rackCode) {
+  if (!locationId || !rackCode) return []
+
+  const prefix = rackCode.slice(0, 2)
+  const shelves = await queryShelvesByLocationPrefix(locationId, prefix)
+  const matched = shelves.filter((shelf) => extractRackCode(shelf.name) === rackCode)
+  if (!matched.length) return []
+
+  return attachShelfItemsAndBalances(matched, locationId)
+}
+
+async function fetchRackUnitShelves(rackUnitId, locationId, rackCode = null) {
+  if (!locationId) return []
+
+  if (rackUnitId) {
+    let shelvesQuery = supabase
+      .from('shelves')
+      .select('id,name,rack_unit_id,shelf_level,shelf_label,qr_slug')
+      .eq('rack_unit_id', rackUnitId)
+      .order('shelf_level', { ascending: true })
+      .limit(20)
+
+    let { data: shelves, error: shelvesError } = await withTimeout(shelvesQuery.eq('is_active', true))
+    if (shelvesError && /is_active|column|rack_unit_id|relationship/.test(shelvesError.message || '')) {
+      ;({ data: shelves, error: shelvesError } = await withTimeout(shelvesQuery))
+    }
+
+    if (!shelvesError && shelves?.length) {
+      return attachShelfItemsAndBalances(shelves, locationId)
+    }
+
+    if (shelvesError && !isMissingRackUnitColumnError(shelvesError)) {
+      throw shelvesError
+    }
+  }
+
+  let code = rackCode
+  if (!code && rackUnitId) {
+    const { data: unit } = await withTimeout(
+      supabase.from('rack_units').select('rack_code,name').eq('id', rackUnitId).maybeSingle(),
+    ).catch(() => ({ data: null }))
+    code = extractRackCode(unit?.rack_code) || extractRackCode(unit?.name)
+  }
+
+  if (code) {
+    return fetchShelvesForRackCode(locationId, code)
+  }
+
+  return []
+}
+
+async function buildRackUnitByCodeResponse(rackUnit, rackCode) {
+  const resolvedCode = rackCode || extractRackCode(rackUnit.rack_code) || extractRackCode(rackUnit.name)
+  const rawShelves = await fetchRackUnitShelves(rackUnit.id, rackUnit.location_id, resolvedCode)
+  const shelves = rawShelves.map((shelf) => {
+    const totalLevels = rawShelves.length || 1
+    return buildShelfRows({
+      ...shelf,
+      shelf_label: shelf.shelf_label || getDefaultShelfLabel(Number(shelf.shelf_level || 1), totalLevels),
+    })
+  })
+
+  return {
+    rackUnitId: rackUnit.id,
+    name: rackUnit.name,
+    rack_code: rackUnit.rack_code || rackCode,
+    roomId: rackUnit.location_id,
+    roomName: rackUnit.locations?.name || '',
+    shelves: shelves.sort((a, b) => Number(b.shelf_level) - Number(a.shelf_level)),
+  }
+}
+
+async function findRackUnitRecordByCode(rackCode) {
+  if (!rackCode) return null
+
+  const prefix = rackCode.slice(0, 2)
+
+  try {
+    const { data: byCode, error: codeError } = await withTimeout(
+      supabase
+        .from('rack_units')
+        .select('id,name,rack_code,location_id,locations(id,name)')
+        .eq('is_active', true)
+        .ilike('rack_code', rackCode)
+        .maybeSingle(),
+    )
+
+    if (codeError) {
+      if (/rack_units|relation|schema cache/.test(codeError.message || '')) return null
+      throw codeError
+    }
+    if (byCode?.id) return byCode
+
+    const { data: candidates, error: candidatesError } = await withTimeout(
+      supabase
+        .from('rack_units')
+        .select('id,name,rack_code,location_id,locations(id,name)')
+        .eq('is_active', true)
+        .or(`rack_code.ilike.${prefix}%,name.ilike.${prefix}%`),
+    )
+
+    if (candidatesError) {
+      if (/rack_units|relation|schema cache/.test(candidatesError.message || '')) return null
+      throw candidatesError
+    }
+
+    return (
+      (candidates || []).find(
+        (unit) =>
+          extractRackCode(unit.rack_code) === rackCode || extractRackCode(unit.name) === rackCode,
+      ) || null
+    )
+  } catch (_error) {
+    return null
+  }
+}
+
+async function findShelfRecordByRackCode(rackCode) {
+  if (!rackCode) return null
+
+  const prefix = rackCode.slice(0, 2)
+  const runGlobalQuery = (select, activeOnly) => {
+    let query = supabase.from('shelves').select(select).ilike('name', `${prefix}%`).limit(100)
+    if (activeOnly) query = query.eq('is_active', true)
+    return withTimeout(query)
+  }
+
+  let { data: shelves, error } = await runGlobalQuery(FULL_SHELF_SELECT, true)
+  if (error && /is_active|column|rack_unit_id|shelf_level|shelf_label/.test(error.message || '')) {
+    ;({ data: shelves, error } = await runGlobalQuery(FULL_SHELF_SELECT, false))
+  }
+  if (error && /column|rack_unit_id|shelf_level|shelf_label/.test(error.message || '')) {
+    ;({ data: shelves, error } = await runGlobalQuery(LEGACY_SHELF_SELECT, true))
+  }
+  if (error && /is_active|column/.test(error.message || '')) {
+    ;({ data: shelves, error } = await runGlobalQuery(LEGACY_SHELF_SELECT, false))
+  }
+  if (error) throw error
+
+  return (shelves || []).find((shelf) => extractRackCode(shelf.name) === rackCode) || null
+}
+
 async function getLegacyShelfByCode(rawCode) {
-  const normalized = String(rawCode || '')
+  const rackCode = normalizeRackCode(rawCode)
+  if (!rackCode) return null
+
+  const matchedShelf = await findShelfRecordByRackCode(rackCode).catch(() => null)
+  if (matchedShelf?.id && matchedShelf.location_id) {
+    const { data: location } = await withTimeout(
+      supabase.from('locations').select('id,name').eq('id', matchedShelf.location_id).maybeSingle(),
+    )
+
+    const rackUnit = await findRackUnitRecordByCode(rackCode)
+    if (rackUnit?.id) {
+      if (!rackUnit.rack_code) {
+        await withTimeout(
+          supabase.from('rack_units').update({ rack_code: rackCode, name: rackCode }).eq('id', rackUnit.id),
+        ).catch(() => {})
+        rackUnit.rack_code = rackCode
+        rackUnit.name = rackCode
+      }
+      return buildRackUnitByCodeResponse(rackUnit, rackCode)
+    }
+
+    const shelves = await fetchShelvesForRackCode(matchedShelf.location_id, rackCode).catch(async () => {
+      const [shelfItemsResult, balancesResult] = await Promise.all([
+        withTimeout(
+          supabase
+            .from('shelf_items')
+            .select('shelf_id,sort_order,is_active,item_id,items(id,name,label)')
+            .eq('shelf_id', matchedShelf.id),
+        ).catch(() => ({ data: [] })),
+        withTimeout(
+          supabase
+            .from('balances')
+            .select('id,shelf_id,current_balance,updated_at,item_id,items(id,name,label)')
+            .eq('shelf_id', matchedShelf.id),
+        ),
+      ])
+
+      return [
+        {
+          ...matchedShelf,
+          shelf_items: shelfItemsResult.data || [],
+          balances: balancesResult.data || [],
+        },
+      ]
+    })
+
+    const normalizedShelves = (shelves?.length ? shelves : [matchedShelf]).map((shelf, index, all) =>
+      buildShelfRows({
+        ...shelf,
+        shelf_level: shelf.shelf_level || all.length - index,
+        shelf_label:
+          shelf.shelf_label ||
+          getDefaultShelfLabel(Number(shelf.shelf_level || all.length - index), all.length || 1),
+        shelf_items: shelf.shelf_items || [],
+        balances: shelf.balances || [],
+      }),
+    )
+
+    return {
+      rackUnitId: matchedShelf.rack_unit_id || matchedShelf.id,
+      name: rackCode,
+      rack_code: rackCode,
+      roomId: matchedShelf.location_id,
+      roomName: location?.name || '',
+      shelves: normalizedShelves.sort((a, b) => Number(b.shelf_level) - Number(a.shelf_level)),
+    }
+  }
+
+  const normalizedSlug = String(rawCode || '')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, '-')
-  if (!normalized) return null
+  if (!normalizedSlug) return null
 
-  const { data, error } = await withTimeout(
+  let { data, error } = await withTimeout(
     supabase
       .from('shelves')
-      .select('id,name,qr_slug,location_id,rack_unit_id,shelf_level,shelf_label')
-      .eq('qr_slug', normalized)
+      .select(FULL_SHELF_SELECT)
+      .eq('qr_slug', normalizedSlug)
       .maybeSingle(),
   )
+  if (error && /column|rack_unit_id|shelf_level|shelf_label/.test(error.message || '')) {
+    ;({ data, error } = await withTimeout(
+      supabase.from('shelves').select(LEGACY_SHELF_SELECT).eq('qr_slug', normalizedSlug).maybeSingle(),
+    ))
+  }
   if (error) throw error
   if (!data?.id || !data.location_id) return null
 
@@ -564,36 +878,41 @@ async function getLegacyShelfByCode(rawCode) {
     supabase.from('locations').select('id,name').eq('id', data.location_id).maybeSingle(),
   )
 
-  const shelves = await fetchRackUnitShelves(data.rack_unit_id, data.location_id).catch(async () => {
-    const [shelfItemsResult, balancesResult] = await Promise.all([
-      withTimeout(
-        supabase
-          .from('shelf_items')
-          .select('shelf_id,sort_order,is_active,item_id,items(id,name,label)')
-          .eq('shelf_id', data.id),
-      ).catch(() => ({ data: [] })),
-      withTimeout(
-        supabase
-          .from('balances')
-          .select('id,shelf_id,current_balance,updated_at,item_id,items(id,name,label)')
-          .eq('shelf_id', data.id),
-      ),
-    ])
+  const codeFromShelf = extractRackCode(data.name) || rackCode
+  const shelves = await fetchRackUnitShelves(data.rack_unit_id, data.location_id, codeFromShelf).catch(
+    async () => {
+      const [shelfItemsResult, balancesResult] = await Promise.all([
+        withTimeout(
+          supabase
+            .from('shelf_items')
+            .select('shelf_id,sort_order,is_active,item_id,items(id,name,label)')
+            .eq('shelf_id', data.id),
+        ).catch(() => ({ data: [] })),
+        withTimeout(
+          supabase
+            .from('balances')
+            .select('id,shelf_id,current_balance,updated_at,item_id,items(id,name,label)')
+            .eq('shelf_id', data.id),
+        ),
+      ])
 
-    return [
-      {
-        ...data,
-        shelf_items: shelfItemsResult.data || [],
-        balances: balancesResult.data || [],
-      },
-    ]
-  })
+      return [
+        {
+          ...data,
+          shelf_items: shelfItemsResult.data || [],
+          balances: balancesResult.data || [],
+        },
+      ]
+    },
+  )
 
-  const normalizedShelves = (shelves?.length ? shelves : [data]).map((shelf) =>
+  const normalizedShelves = (shelves?.length ? shelves : [data]).map((shelf, index, all) =>
     buildShelfRows({
       ...shelf,
-      shelf_level: shelf.shelf_level || 1,
-      shelf_label: shelf.shelf_label || 'Shelf 1',
+      shelf_level: shelf.shelf_level || all.length - index,
+      shelf_label:
+        shelf.shelf_label ||
+        getDefaultShelfLabel(Number(shelf.shelf_level || all.length - index), all.length || 1),
       shelf_items: shelf.shelf_items || [],
       balances: shelf.balances || [],
     }),
@@ -602,7 +921,7 @@ async function getLegacyShelfByCode(rawCode) {
   return {
     rackUnitId: data.rack_unit_id || data.id,
     name: data.name,
-    rack_code: normalizeRackCode(rawCode) || null,
+    rack_code: codeFromShelf,
     roomId: data.location_id,
     roomName: location?.name || '',
     shelves: normalizedShelves.sort((a, b) => Number(b.shelf_level) - Number(a.shelf_level)),
@@ -614,45 +933,23 @@ export async function getRackUnitByCode(rawCode) {
   if (!rackCode) return null
 
   try {
-    const { data: rackUnit, error } = await withTimeout(
-      supabase
-        .from('rack_units')
-        .select('id,name,rack_code,location_id,locations(id,name)')
-        .eq('rack_code', rackCode)
-        .eq('is_active', true)
-        .maybeSingle(),
-    )
-
-    if (error) {
-      if (/rack_units|relation|schema cache/.test(error.message || '')) {
-        return getLegacyShelfByCode(rawCode)
-      }
-      throw error
-    }
+    const rackUnit = await findRackUnitRecordByCode(rackCode)
 
     if (!rackUnit?.id) {
       return getLegacyShelfByCode(rawCode)
     }
 
-    const rawShelves = await fetchRackUnitShelves(rackUnit.id, rackUnit.location_id)
-    const shelves = rawShelves.map((shelf) => {
-      const totalLevels = rawShelves.length || 1
-      return buildShelfRows({
-        ...shelf,
-        shelf_label: shelf.shelf_label || getDefaultShelfLabel(Number(shelf.shelf_level || 1), totalLevels),
-      })
-    })
-
-    return {
-      rackUnitId: rackUnit.id,
-      name: rackUnit.name,
-      rack_code: rackUnit.rack_code,
-      roomId: rackUnit.location_id,
-      roomName: rackUnit.locations?.name || '',
-      shelves: shelves.sort((a, b) => Number(b.shelf_level) - Number(a.shelf_level)),
+    if (!rackUnit.rack_code) {
+      await withTimeout(
+        supabase.from('rack_units').update({ rack_code: rackCode, name: rackCode }).eq('id', rackUnit.id),
+      )
+      rackUnit.rack_code = rackCode
+      rackUnit.name = rackCode
     }
+
+    return buildRackUnitByCodeResponse(rackUnit, rackCode)
   } catch (error) {
-    if (/rack_units|relation|schema cache/.test(error.message || '')) {
+    if (isMissingRackUnitColumnError(error)) {
       return getLegacyShelfByCode(rawCode)
     }
     throw error
@@ -895,7 +1192,8 @@ export async function getAdminRoomRacks(locationId) {
 
     const units = await Promise.all(
       (rackUnits || []).map(async (unit) => {
-        const shelves = await fetchRackUnitShelves(unit.id, locationId)
+        const resolvedCode = extractRackCode(unit.rack_code) || extractRackCode(unit.name)
+        const shelves = await fetchRackUnitShelves(unit.id, locationId, resolvedCode)
         const primaryShelf = shelves[0] || null
         return {
           id: unit.id,
@@ -914,7 +1212,7 @@ export async function getAdminRoomRacks(locationId) {
 
     return units
   } catch (error) {
-    if (/rack_units|relation|schema cache/.test(error.message || '')) {
+    if (isMissingRackUnitColumnError(error)) {
       return getAdminRoomRacksLegacy(locationId)
     }
     throw error
@@ -999,20 +1297,36 @@ export async function createRack({
       for (let level = 1; level <= totalShelves; level += 1) {
         const shelfLabel = getDefaultShelfLabel(level, totalShelves)
         const qrSlug = buildQrSlug(locationName, `${normalizedCode}-${shelfLabel}`)
-        const { data: shelf, error: shelfError } = await withTimeout(
+        const fullPayload = {
+          location_id: locationId,
+          name: `${normalizedCode} · ${shelfLabel}`,
+          qr_slug: qrSlug,
+          rack_unit_id: rackUnit.id,
+          shelf_level: level,
+          shelf_label: shelfLabel,
+        }
+        const legacyPayload = {
+          location_id: locationId,
+          name: `${normalizedCode} · ${shelfLabel}`,
+          qr_slug: qrSlug,
+        }
+
+        let { data: shelf, error: shelfError } = await withTimeout(
           supabase
             .from('shelves')
-            .insert({
-              location_id: locationId,
-              name: `${normalizedCode} · ${shelfLabel}`,
-              qr_slug: qrSlug,
-              rack_unit_id: rackUnit.id,
-              shelf_level: level,
-              shelf_label: shelfLabel,
-            })
+            .insert(fullPayload)
             .select('id,name,qr_slug,location_id,created_at,rack_unit_id,shelf_level,shelf_label')
             .single(),
         )
+        if (shelfError && /rack_unit_id|shelf_level|shelf_label|column/.test(shelfError.message || '')) {
+          ;({ data: shelf, error: shelfError } = await withTimeout(
+            supabase
+              .from('shelves')
+              .insert(legacyPayload)
+              .select('id,name,qr_slug,location_id,created_at')
+              .single(),
+          ))
+        }
         if (shelfError) throw shelfError
         await setRackItems({ shelfId: shelf.id, itemIds })
         createdShelves.push(shelf)
@@ -1120,6 +1434,28 @@ export async function setRackItems({ shelfId, itemIds = [] }) {
   }
 }
 
+async function getShelfIdsForRackUnit(rackUnitId) {
+  let { data: shelves, error } = await withTimeout(
+    supabase.from('shelves').select('id,location_id').eq('rack_unit_id', rackUnitId).eq('is_active', true),
+  )
+  if (error && /is_active|column|rack_unit_id/.test(error.message || '')) {
+    ;({ data: shelves, error } = await withTimeout(
+      supabase.from('shelves').select('id,location_id').eq('rack_unit_id', rackUnitId),
+    ))
+  }
+  if (error && isMissingRackUnitColumnError(error)) {
+    const { data: unit } = await withTimeout(
+      supabase.from('rack_units').select('rack_code,name,location_id').eq('id', rackUnitId).maybeSingle(),
+    ).catch(() => ({ data: null }))
+    const rackCode = extractRackCode(unit?.rack_code) || extractRackCode(unit?.name)
+    if (!rackCode || !unit?.location_id) return []
+    const matched = await fetchShelvesForRackCode(unit.location_id, rackCode)
+    return matched.map((shelf) => ({ id: shelf.id, location_id: shelf.location_id || unit.location_id }))
+  }
+  if (error) throw error
+  return shelves || []
+}
+
 export async function updateRack({ rackUnitId, shelfId, itemIds, shelfConfigs }) {
   try {
     const targetRackUnitId = rackUnitId || null
@@ -1135,10 +1471,8 @@ export async function updateRack({ rackUnitId, shelfId, itemIds, shelfConfigs })
           }
         }
       } else if (itemIds !== undefined) {
-        const { data: shelves } = await withTimeout(
-          supabase.from('shelves').select('id').eq('rack_unit_id', targetRackUnitId).eq('is_active', true),
-        )
-        for (const shelf of shelves || []) {
+        const shelves = await getShelfIdsForRackUnit(targetRackUnitId)
+        for (const shelf of shelves) {
           await setRackItems({ shelfId: shelf.id, itemIds })
         }
       }
@@ -1170,11 +1504,9 @@ export async function deleteRack({ rackUnitId, shelfId }) {
       }
 
       if (unit?.id) {
-        const { data: shelves } = await withTimeout(
-          supabase.from('shelves').select('id,location_id').eq('rack_unit_id', targetRackUnitId),
-        )
+        const shelves = await getShelfIdsForRackUnit(targetRackUnitId)
 
-        for (const shelf of shelves || []) {
+        for (const shelf of shelves) {
           await deactivateShelfRecord(shelf.id, shelf.location_id)
         }
 
@@ -1191,9 +1523,14 @@ export async function deleteRack({ rackUnitId, shelfId }) {
       }
     }
 
-    const { data: shelf, error: shelfFetchError } = await withTimeout(
+    let { data: shelf, error: shelfFetchError } = await withTimeout(
       supabase.from('shelves').select('id,location_id,rack_unit_id').eq('id', targetShelfId).maybeSingle(),
     )
+    if (shelfFetchError && /column|rack_unit_id/.test(shelfFetchError.message || '')) {
+      ;({ data: shelf, error: shelfFetchError } = await withTimeout(
+        supabase.from('shelves').select('id,location_id').eq('id', targetShelfId).maybeSingle(),
+      ))
+    }
     if (shelfFetchError) throw shelfFetchError
     if (!shelf) throw new Error('Rack not found.')
 

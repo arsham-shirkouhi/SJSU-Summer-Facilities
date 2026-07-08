@@ -276,6 +276,7 @@ drop policy if exists "Admins can read all profiles" on profiles;
 drop policy if exists "Users can update own profile" on profiles;
 drop policy if exists "Authenticated users can read locations" on locations;
 drop policy if exists "Authenticated users can read items" on items;
+drop policy if exists "Authenticated users can insert custom items" on items;
 drop policy if exists "Authenticated users can read balances" on balances;
 drop policy if exists "Authenticated users can update balances" on balances;
 drop policy if exists "Authenticated users can insert balances" on balances;
@@ -859,6 +860,13 @@ create policy "Authenticated users can read locations"
 create policy "Authenticated users can read items"
   on items for select
   using (auth.role() = 'authenticated');
+
+create policy "Authenticated users can insert custom items"
+  on items for insert
+  with check (
+    auth.role() = 'authenticated'
+    and starts_with(name, 'custom_')
+  );
 
 -- balances: all authenticated users can read and update
 create policy "Authenticated users can read balances"
