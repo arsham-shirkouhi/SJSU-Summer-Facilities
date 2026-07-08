@@ -38,8 +38,7 @@ export function CustomItemCreator({ onCreated, disabled }) {
   const [label, setLabel] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const handleSubmit = async (event) => {
-    event.preventDefault()
+  const handleAdd = async () => {
     if (!label.trim()) {
       toast.error('Enter a name for the custom item')
       return
@@ -59,7 +58,7 @@ export function CustomItemCreator({ onCreated, disabled }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-2 border-dashed border-ink bg-white p-3">
+    <div className="border-2 border-dashed border-ink bg-white p-3">
       <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.08em]">Add Custom Item Type</p>
       <p className="mb-2 text-[10px] text-[#6B6B6B]">
         Create a new inventory type beyond the 6 standard linen items.
@@ -72,16 +71,28 @@ export function CustomItemCreator({ onCreated, disabled }) {
           maxLength={60}
           disabled={disabled || saving}
           onChange={(event) => setLabel(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              event.stopPropagation()
+              handleAdd()
+            }
+          }}
         />
         <button
-          type="submit"
+          type="button"
           disabled={disabled || saving}
           className="brutal-btn bg-amber px-3 py-2 text-[11px] disabled:opacity-60"
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            handleAdd()
+          }}
         >
           {saving ? 'Adding...' : 'Add Type'}
         </button>
       </div>
-    </form>
+    </div>
   )
 }
 
@@ -129,6 +140,7 @@ export function RackFormModal({
   const [itemIds, setItemIds] = useState(initial?.itemIds || [])
   const [shelfConfigs, setShelfConfigs] = useState(initial?.shelfConfigs || [])
   const [nextRackCode, setNextRackCode] = useState('')
+  const [availableItems, setAvailableItems] = useState(items || [])
 
   const roomPrefix = getRoomRackPrefix(roomName)
   const rackCode = mode === 'edit' ? initial?.rackCode || '' : nextRackCode
@@ -138,6 +150,10 @@ export function RackFormModal({
     setItemIds(initial?.itemIds || [])
     setShelfConfigs(initial?.shelfConfigs || [])
   }, [initial])
+
+  useEffect(() => {
+    setAvailableItems(items || [])
+  }, [items])
 
   useEffect(() => {
     if (mode !== 'create' || !roomName) {
@@ -177,7 +193,17 @@ export function RackFormModal({
   }
 
   const handleCustomItemCreated = async (item) => {
-    await onItemsReload?.()
+    setAvailableItems((current) => {
+      if (current.some((entry) => entry.id === item.id)) return current
+      return [...current, item]
+    })
+
+    try {
+      await onItemsReload?.()
+    } catch (error) {
+      toast.error(error.message || 'Failed to refresh item list')
+    }
+
     if (mode === 'create') {
       setItemIds((current) => (current.includes(item.id) ? current : [...current, item.id]))
     }
@@ -186,7 +212,7 @@ export function RackFormModal({
   const itemPickerSections = (
     <>
       <div className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {items.map((item) => {
+        {availableItems.map((item) => {
           const selected = itemIds.includes(item.id)
           return (
             <ItemPickerOption
@@ -270,7 +296,7 @@ export function RackFormModal({
                   key={config.shelfId}
                   shelfLabel={config.shelfLabel}
                   itemIds={config.itemIds || []}
-                  items={items}
+                  items={availableItems}
                   onChange={(nextItemIds) => updateShelfItems(config.shelfId, nextItemIds)}
                 />
               ))}

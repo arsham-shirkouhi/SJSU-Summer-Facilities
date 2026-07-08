@@ -74,7 +74,7 @@ export default function AdminRacks() {
   }
 
   const reloadItems = async () => {
-    const itemRows = await getRackItems()
+    const itemRows = await getRackItems({ fresh: true })
     setItems(itemRows || [])
   }
 

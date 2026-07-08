@@ -2,17 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import {
   CalendarDays,
   CheckCircle,
+  Hash,
   PackageCheck,
-  QrCode,
   Truck,
   X,
 } from 'lucide-react'
 import { format, formatDistanceToNowStrict, isToday, parseISO } from 'date-fns'
-import { QRCodeSVG } from 'qrcode.react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
 import BottomNav from '../components/BottomNav'
+import RackCodeModal from '../components/RackCodeModal'
 import LaundryLoadCard from '../components/LaundryLoadCard'
 import NewLoadModal from '../components/NewLoadModal'
 import AdminLinenCount from '../components/AdminLinenCount'
@@ -30,10 +30,12 @@ import {
   getActiveLaundryLoads,
   getLocations,
   getNextPickupEvents,
+  getRackUnitByCode,
   getStorageRooms,
   updateLaundryLoadStatus,
 } from '../lib/queries'
 import { formatEventScheduleLabel, getEventColor, parseEventNotes } from '../lib/eventNotes'
+import { formatRackCodeInput, isValidRackCode } from '../lib/rackCodes'
 
 const ROOM_DISPLAY_ORDER = [
   'Mailroom Storage',
@@ -75,6 +77,7 @@ export default function Dashboard() {
 }
 
 function StaffDashboard({ user, profile }) {
+  const navigate = useNavigate()
   const [rooms, setRooms] = useState([])
   const [roomsLoading, setRoomsLoading] = useState(true)
   const [roomsError, setRoomsError] = useState('')
@@ -88,7 +91,8 @@ function StaffDashboard({ user, profile }) {
   const [laundryLoading, setLaundryLoading] = useState(true)
   const [laundryError, setLaundryError] = useState('')
   const [showNewLoadModal, setShowNewLoadModal] = useState(false)
-  const [qrRoom, setQrRoom] = useState(null)
+  const [showRackCodeModal, setShowRackCodeModal] = useState(false)
+  const [rackCodeSubmitting, setRackCodeSubmitting] = useState(false)
   const roomsRefetchTimerRef = useRef(null)
 
   const refetchRooms = async (showLoading = true, forceFresh = false) => {
@@ -170,9 +174,57 @@ function StaffDashboard({ user, profile }) {
     }
   }, [])
 
+  const handleRackCodeSubmit = async (rawValue) => {
+    const value = formatRackCodeInput(rawValue)
+    if (!value) {
+      toast.error('Enter a rack code')
+      return
+    }
+    if (!isValidRackCode(value)) {
+      toast.error('Use a room rack code like JW01, MS02, OG03, PO01, or SV01')
+      return
+    }
+
+    try {
+      setRackCodeSubmitting(true)
+      const rack = await getRackUnitByCode(value)
+      if (!rack?.roomId) {
+        toast.error('Rack code not found')
+        return
+      }
+
+      const targetShelf = [...(rack.shelves || [])].sort(
+        (a, b) => Number(a.shelf_level || 1) - Number(b.shelf_level || 1),
+      )[0]
+      if (!targetShelf?.id) {
+        toast.error('Rack has no shelves to count')
+        return
+      }
+
+      setShowRackCodeModal(false)
+      navigate(`/inventory?room=${rack.roomId}&shelf=${targetShelf.id}`)
+    } catch (lookupError) {
+      toast.error(lookupError.message || 'Failed to look up rack code')
+    } finally {
+      setRackCodeSubmitting(false)
+    }
+  }
+
   return (
     <section className="mx-auto w-full max-w-[1024px] px-4 py-5 sm:px-6 md:px-8">
-      <GreetingHeader profile={profile} />
+      <GreetingHeader
+        profile={profile}
+        headerActions={
+          <button
+            type="button"
+            className="brutal-btn flex items-center gap-1.5 bg-white px-3 py-2 text-[11px]"
+            onClick={() => setShowRackCodeModal(true)}
+          >
+            <Hash size={14} />
+            Enter Code
+          </button>
+        }
+      />
 
       {!dismissedNote && shiftNote ? (
         <div className="mb-4 flex items-start justify-between gap-3 border-[2.5px] border-ink bg-amber px-4 py-3 shadow-brutal">
@@ -212,7 +264,7 @@ function StaffDashboard({ user, profile }) {
         ) : (
           <div className="staff-storage-grid grid grid-cols-3 gap-2">
             {sortRoomsByDisplayOrder(rooms).map((room) => (
-              <StorageCard key={room.id} room={room} compact onShowQr={() => setQrRoom(room)} />
+              <StorageCard key={room.id} room={room} compact />
             ))}
           </div>
         )}
@@ -238,7 +290,14 @@ function StaffDashboard({ user, profile }) {
         />
       </section>
 
-      {qrRoom ? <QRModal room={qrRoom} onClose={() => setQrRoom(null)} /> : null}
+      {showRackCodeModal ? (
+        <RackCodeModal
+          eyebrow="Dashboard"
+          onClose={() => setShowRackCodeModal(false)}
+          onSubmit={handleRackCodeSubmit}
+          submitting={rackCodeSubmitting}
+        />
+      ) : null}
       <NewLoadModal
         isOpen={showNewLoadModal}
         onClose={() => setShowNewLoadModal(false)}
@@ -322,16 +381,19 @@ function AdminDashboard({ profile }) {
   )
 }
 
-function GreetingHeader({ profile }) {
+function GreetingHeader({ profile, headerActions = null }) {
   return (
     <div className="mb-6 border-b-[3px] border-ink pb-4 sm:flex sm:items-end sm:justify-between">
       <div>
         <p className="text-[11px] uppercase tracking-[0.08em] text-[#6B6B6B]">Good Morning,</p>
         <h2 className="text-[28px] font-extrabold">{profile?.full_name || 'Staff'}</h2>
       </div>
-      <div className="mt-2 text-left sm:mt-0 sm:text-right">
-        <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">{format(new Date(), 'EEEE')}</p>
-        <p className="mono text-[16px] font-bold">{format(new Date(), 'dd MMM yyyy').toUpperCase()}</p>
+      <div className="mt-2 flex items-end justify-end gap-3 sm:mt-0">
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-[0.08em] text-[#6B6B6B]">{format(new Date(), 'EEEE')}</p>
+          <p className="mono text-[16px] font-bold">{format(new Date(), 'dd MMM yyyy').toUpperCase()}</p>
+        </div>
+        {headerActions}
       </div>
     </div>
   )
@@ -476,7 +538,7 @@ function QuickAction({ icon: Icon, label, onClick }) {
   )
 }
 
-function StorageCard({ room, onShowQr, admin = false, infoOnly = false, compact = false, className = '' }) {
+function StorageCard({ room, admin = false, infoOnly = false, compact = false, className = '' }) {
   const navigate = useNavigate()
   const openRoomInventory = () => {
     if (room?.id) navigate(`/inventory?room=${room.id}`)
@@ -500,21 +562,13 @@ function StorageCard({ room, onShowQr, admin = false, infoOnly = false, compact 
         <p className="mono text-[24px] font-bold leading-none sm:text-[28px]">{room.total_bundles}</p>
         <p className="text-[8px] uppercase tracking-[0.06em] text-[#6B6B6B] sm:text-[9px]">Items</p>
         {infoOnly ? null : (
-          <div className="mt-2 flex min-w-0 items-center gap-1.5">
+          <div className="mt-2">
             <button
               type="button"
               onClick={openRoomInventory}
-              className="brutal-btn min-w-0 flex-1 truncate bg-primary px-1.5 py-1.5 text-[9px] text-white sm:text-[10px]"
+              className="brutal-btn w-full bg-primary px-1.5 py-1.5 text-[9px] text-white sm:text-[10px]"
             >
               Count →
-            </button>
-            <button
-              type="button"
-              onClick={onShowQr}
-              className="brutal-card flex h-8 w-8 shrink-0 items-center justify-center bg-white sm:h-9 sm:w-9"
-              aria-label="Show QR code"
-            >
-              <QrCode size={14} />
             </button>
           </div>
         )}
@@ -546,20 +600,13 @@ function StorageCard({ room, onShowQr, admin = false, infoOnly = false, compact 
         </p>
       </div>
       {infoOnly ? null : (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-2">
           <button
             type="button"
             onClick={openRoomInventory}
-            className="brutal-btn flex-1 bg-primary px-2 py-2.5 text-[12px] text-white"
+            className="brutal-btn w-full bg-primary px-2 py-2.5 text-[12px] text-white"
           >
             Count Now →
-          </button>
-          <button
-            type="button"
-            onClick={onShowQr}
-            className="brutal-card flex h-10 w-10 items-center justify-center bg-white"
-          >
-            <QrCode size={18} />
           </button>
         </div>
       )}
@@ -631,23 +678,6 @@ function LaundryLoadsPanel({ loads, loading, error, onRetry, onNewLoad, onComple
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-function QRModal({ room, onClose }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 px-4">
-      <div className="brutal-card w-full max-w-[320px] bg-white p-8 text-center">
-        <p className="mb-3 text-[18px] font-extrabold">{room.name.toUpperCase()}</p>
-        <div className="mx-auto mb-3 w-fit border-2 border-ink p-2">
-          <QRCodeSVG value={`${window.location.origin}/inventory?room=${room.id}`} size={180} />
-        </div>
-        <p className="text-[12px] text-[#6B6B6B]">Scan to count this room</p>
-        <button type="button" onClick={onClose} className="brutal-btn mt-4 w-full bg-white py-2.5 text-[12px]">
-          Close ✗
-        </button>
-      </div>
     </div>
   )
 }

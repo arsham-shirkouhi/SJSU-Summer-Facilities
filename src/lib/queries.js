@@ -340,9 +340,9 @@ export async function getStorageRooms(options = {}) {
   return rows
 }
 
-export async function getItems() {
+export async function getItems(options = {}) {
   try {
-    if (cachedItems) return cachedItems
+    if (!options.fresh && cachedItems) return cachedItems
     const { data, error } = await withTimeout(
       supabase.from('items').select('id,name,label').eq('is_active', true).order('label').limit(100),
     )
@@ -428,8 +428,8 @@ export async function createCustomItem(label) {
   throw new Error('Could not create that custom item. Try a different name.')
 }
 
-export async function getRackItems() {
-  const allItems = await getItems()
+export async function getRackItems(options = {}) {
+  const allItems = await getItems(options)
   const byName = Object.fromEntries(allItems.map((item) => [item.name, item]))
   const standard = SETTINGS.rackItems.map((config) => byName[config.key]).filter(Boolean)
   const standardNames = new Set(SETTINGS.rackItems.map((config) => config.key))
