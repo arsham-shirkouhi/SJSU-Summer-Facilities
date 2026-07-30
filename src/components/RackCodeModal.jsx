@@ -29,7 +29,7 @@ export default function RackCodeModal({ onClose, onSubmit, submitting, eyebrow =
 
         <form onSubmit={handleSubmit}>
           <p className="mb-2 text-[11px] font-semibold text-[#6B6B6B]">
-            Enter the rack label code (JW, MS, OG, PO, or SV + number).
+            Enter the rack label code (JW, MS, OG, PP, or SV + number).
           </p>
           <input
             className="brutal-input w-full text-center text-[28px] font-bold uppercase tracking-[0.2em]"

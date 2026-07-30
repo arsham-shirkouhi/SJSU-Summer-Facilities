@@ -5,7 +5,9 @@ import { eventIsActiveOnDate, getEventDateRange } from './eventNotes'
 import {
   getDefaultShelfLabel,
   getRoomRackPrefix,
+  getRelatedRackPrefixes,
   buildNextRackCode,
+  canonicalizeRackCode,
   normalizeRackCode,
   extractRackCode,
 } from './rackCodes'
@@ -717,30 +719,39 @@ async function buildRackUnitByCodeResponse(rackUnit, rackCode) {
 async function findRackUnitRecordByCode(rackCode) {
   if (!rackCode) return null
 
-  const prefix = rackCode.slice(0, 2)
+  const normalized = normalizeRackCode(rackCode)
+  const canonical = canonicalizeRackCode(normalized)
+  const codeVariants = [...new Set([normalized, canonical].filter(Boolean))]
+  const prefixes = getRelatedRackPrefixes(normalized.slice(0, 2))
 
   try {
-    const { data: byCode, error: codeError } = await withTimeout(
-      supabase
-        .from('rack_units')
-        .select('id,name,rack_code,location_id,locations(id,name)')
-        .eq('is_active', true)
-        .ilike('rack_code', rackCode)
-        .maybeSingle(),
-    )
+    for (const code of codeVariants) {
+      const { data: byCode, error: codeError } = await withTimeout(
+        supabase
+          .from('rack_units')
+          .select('id,name,rack_code,location_id,locations(id,name)')
+          .eq('is_active', true)
+          .ilike('rack_code', code)
+          .maybeSingle(),
+      )
 
-    if (codeError) {
-      if (/rack_units|relation|schema cache/.test(codeError.message || '')) return null
-      throw codeError
+      if (codeError) {
+        if (/rack_units|relation|schema cache/.test(codeError.message || '')) return null
+        throw codeError
+      }
+      if (byCode?.id) return byCode
     }
-    if (byCode?.id) return byCode
+
+    const unitFilter = prefixes
+      .flatMap((p) => [`rack_code.ilike.${p}%`, `name.ilike.${p}%`])
+      .join(',')
 
     const { data: candidates, error: candidatesError } = await withTimeout(
       supabase
         .from('rack_units')
         .select('id,name,rack_code,location_id,locations(id,name)')
         .eq('is_active', true)
-        .or(`rack_code.ilike.${prefix}%,name.ilike.${prefix}%`),
+        .or(unitFilter),
     )
 
     if (candidatesError) {
@@ -749,10 +760,11 @@ async function findRackUnitRecordByCode(rackCode) {
     }
 
     return (
-      (candidates || []).find(
-        (unit) =>
-          extractRackCode(unit.rack_code) === rackCode || extractRackCode(unit.name) === rackCode,
-      ) || null
+      (candidates || []).find((unit) => {
+        const unitCode = extractRackCode(unit.rack_code) || extractRackCode(unit.name)
+        if (!unitCode) return false
+        return codeVariants.includes(unitCode) || codeVariants.includes(canonicalizeRackCode(unitCode))
+      }) || null
     )
   } catch (_error) {
     return null
@@ -959,29 +971,36 @@ export async function getRackUnitByCode(rawCode) {
 async function fetchRackCodesForPrefix(prefix) {
   if (!prefix) return []
 
+  const prefixes = getRelatedRackPrefixes(prefix)
   const codes = new Set()
 
   try {
-    const [{ data: units, error: unitsError }, shelvesResult] = await Promise.all([
-        withTimeout(
-          supabase
-            .from('rack_units')
-            .select('rack_code,name')
-            .eq('is_active', true)
-            .or(`rack_code.ilike.${prefix}%,name.ilike.${prefix}%`),
-        ),
-        withTimeout(
-          supabase.from('shelves').select('name').eq('is_active', true).ilike('name', `${prefix}%`),
-        ).catch(() => ({ data: null, error: null })),
-      ])
+    const unitFilter = prefixes
+      .flatMap((p) => [`rack_code.ilike.${p}%`, `name.ilike.${p}%`])
+      .join(',')
 
-    let shelves = shelvesResult?.data
-    const shelvesError = shelvesResult?.error
+    const [{ data: units, error: unitsError }, ...shelfResults] = await Promise.all([
+      withTimeout(
+        supabase.from('rack_units').select('rack_code,name').eq('is_active', true).or(unitFilter),
+      ),
+      ...prefixes.map((p) =>
+        withTimeout(
+          supabase.from('shelves').select('name').eq('is_active', true).ilike('name', `${p}%`),
+        ).catch(() => ({ data: null, error: null })),
+      ),
+    ])
+
+    let shelves = shelfResults.flatMap((result) => result?.data || [])
+    const shelvesError = shelfResults.find((result) => result?.error)?.error
     if (shelvesError && /is_active|column/.test(shelvesError.message || '')) {
-      const fallback = await withTimeout(
-        supabase.from('shelves').select('name').ilike('name', `${prefix}%`),
-      ).catch(() => ({ data: null, error: shelvesError }))
-      shelves = fallback?.data
+      const fallbacks = await Promise.all(
+        prefixes.map((p) =>
+          withTimeout(supabase.from('shelves').select('name').ilike('name', `${p}%`)).catch(() => ({
+            data: null,
+          })),
+        ),
+      )
+      shelves = fallbacks.flatMap((result) => result?.data || [])
     }
 
     if (unitsError) {
@@ -1114,6 +1133,20 @@ export async function getNextRackCodeForRoom(locationName, locationId = null) {
   return buildNextRackCode(prefix, existingCodes)
 }
 
+async function renameShelvesForRackCode(locationId, fromCode, toCode) {
+  if (!locationId || !fromCode || !toCode || fromCode === toCode) return
+
+  const shelves = await fetchShelvesForRackCode(locationId, fromCode).catch(() => [])
+  for (const shelf of shelves || []) {
+    const nextName = String(shelf.name || '').replace(fromCode, toCode)
+    const patch = { name: nextName }
+    if (shelf.qr_slug) {
+      patch.qr_slug = String(shelf.qr_slug).replace(new RegExp(fromCode, 'ig'), toCode.toLowerCase())
+    }
+    await withTimeout(supabase.from('shelves').update(patch).eq('id', shelf.id)).catch(() => {})
+  }
+}
+
 async function assignMissingRackCodes(locationId, locationName) {
   const prefix = getRoomRackPrefix(locationName)
   if (!prefix) return
@@ -1139,7 +1172,24 @@ async function assignMissingRackCodes(locationId, locationName) {
     const usedCodes = new Set(existingCodes)
     for (const unit of roomUnits || []) {
       if (unit.rack_code) {
-        usedCodes.add(normalizeRackCode(unit.rack_code))
+        const currentCode = normalizeRackCode(unit.rack_code)
+        const canonicalCode = canonicalizeRackCode(currentCode)
+
+        // Migrate legacy prefixes (PO01 → PP01) so P1 racks don't look like "P0".
+        if (canonicalCode && canonicalCode !== currentCode) {
+          const { error: migrateError } = await withTimeout(
+            supabase
+              .from('rack_units')
+              .update({ rack_code: canonicalCode, name: canonicalCode })
+              .eq('id', unit.id),
+          )
+          if (migrateError) throw migrateError
+          await renameShelvesForRackCode(locationId, currentCode, canonicalCode)
+          usedCodes.add(canonicalCode)
+          continue
+        }
+
+        usedCodes.add(currentCode)
         if (unit.name !== unit.rack_code) {
           await withTimeout(
             supabase.from('rack_units').update({ name: unit.rack_code }).eq('id', unit.id),
@@ -1148,7 +1198,7 @@ async function assignMissingRackCodes(locationId, locationName) {
         continue
       }
 
-      const codeFromName = extractRackCode(unit.name)
+      const codeFromName = canonicalizeRackCode(extractRackCode(unit.name) || '')
       if (codeFromName) {
         const { error: updateError } = await withTimeout(
           supabase

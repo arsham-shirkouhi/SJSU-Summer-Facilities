@@ -1,13 +1,44 @@
 export const DEFAULT_SHELF_LABELS = ['Bottom Shelf', 'Middle Shelf', 'Top Shelf']
 
-export const RACK_CODE_PREFIXES = ['JW', 'PO', 'MS', 'SV', 'OG']
+// PO kept for legacy lookup only — P1 Storage now uses PP (avoids looking like "P0").
+export const RACK_CODE_PREFIXES = ['JW', 'PP', 'PO', 'MS', 'SV', 'OG']
 
 export const ROOM_RACK_PREFIXES = {
   'Mailroom Storage': 'MS',
   'Joe west linen': 'JW',
   OGH: 'OG',
-  'P1 Storage': 'PO',
+  'P1 Storage': 'PP',
   SVP: 'SV',
+}
+
+/** Old prefix → current prefix (same number space). */
+export const LEGACY_RACK_PREFIX_MAP = {
+  PO: 'PP',
+}
+
+export function canonicalizeRackPrefix(prefix) {
+  const value = String(prefix || '')
+    .trim()
+    .toUpperCase()
+    .slice(0, 2)
+  return LEGACY_RACK_PREFIX_MAP[value] || value
+}
+
+export function canonicalizeRackCode(raw) {
+  const normalized = normalizeRackCode(raw)
+  if (!normalized || normalized.length < 2) return normalized
+  const prefix = canonicalizeRackPrefix(normalized.slice(0, 2))
+  return `${prefix}${normalized.slice(2)}`
+}
+
+/** Prefixes that share a number space with the given prefix (e.g. PP + legacy PO). */
+export function getRelatedRackPrefixes(prefix) {
+  const canonical = canonicalizeRackPrefix(prefix)
+  const related = new Set([canonical])
+  for (const [legacy, current] of Object.entries(LEGACY_RACK_PREFIX_MAP)) {
+    if (current === canonical) related.add(legacy)
+  }
+  return [...related]
 }
 
 export function getRoomRackPrefix(locationName) {
@@ -22,7 +53,7 @@ export function getRoomRackPrefix(locationName) {
   if (normalized.includes('mailroom')) return 'MS'
   if (normalized.includes('joe')) return 'JW'
   if (normalized.includes('ogh')) return 'OG'
-  if (normalized.includes('p1')) return 'PO'
+  if (normalized.includes('p1')) return 'PP'
   if (normalized.includes('svp')) return 'SV'
 
   return null
@@ -67,18 +98,18 @@ export function formatRackCodeInput(raw) {
 }
 
 export function buildNextRackCode(prefix, existingCodes = []) {
-  const safePrefix = String(prefix || '')
-    .trim()
-    .toUpperCase()
-    .slice(0, 2)
+  const safePrefix = canonicalizeRackPrefix(prefix)
   if (!safePrefix) return ''
+
+  const relatedPrefixes = getRelatedRackPrefixes(safePrefix)
 
   const usedNumbers = new Set(
     (existingCodes || [])
       .map((code) => {
         const normalized = normalizeRackCode(code)
-        if (!normalized.startsWith(safePrefix)) return null
-        const number = Number(normalized.slice(safePrefix.length))
+        const codePrefix = normalized.slice(0, 2)
+        if (!relatedPrefixes.includes(codePrefix)) return null
+        const number = Number(normalized.slice(2))
         return Number.isFinite(number) ? number : null
       })
       .filter((value) => value !== null),

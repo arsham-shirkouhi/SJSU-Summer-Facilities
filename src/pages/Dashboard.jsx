@@ -181,7 +181,7 @@ function StaffDashboard({ user, profile }) {
       return
     }
     if (!isValidRackCode(value)) {
-      toast.error('Use a room rack code like JW01, MS02, OG03, PO01, or SV01')
+      toast.error('Use a room rack code like JW01, MS02, OG03, PP01, or SV01')
       return
     }
 
