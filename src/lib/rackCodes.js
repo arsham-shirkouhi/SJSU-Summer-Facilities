@@ -73,16 +73,23 @@ export function buildNextRackCode(prefix, existingCodes = []) {
     .slice(0, 2)
   if (!safePrefix) return ''
 
-  const usedNumbers = (existingCodes || [])
-    .map((code) => {
-      const normalized = normalizeRackCode(code)
-      if (!normalized.startsWith(safePrefix)) return null
-      const number = Number(normalized.slice(safePrefix.length))
-      return Number.isFinite(number) ? number : null
-    })
-    .filter((value) => value !== null)
+  const usedNumbers = new Set(
+    (existingCodes || [])
+      .map((code) => {
+        const normalized = normalizeRackCode(code)
+        if (!normalized.startsWith(safePrefix)) return null
+        const number = Number(normalized.slice(safePrefix.length))
+        return Number.isFinite(number) ? number : null
+      })
+      .filter((value) => value !== null),
+  )
 
-  const nextNumber = usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1
+  // Reuse the lowest free number so deleted racks free their codes (JW01, JW02, …).
+  let nextNumber = 1
+  while (usedNumbers.has(nextNumber) && nextNumber < 100) {
+    nextNumber += 1
+  }
+
   return `${safePrefix}${String(nextNumber).padStart(2, '0')}`
 }
 

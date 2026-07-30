@@ -997,6 +997,8 @@ async function fetchRackCodesForPrefix(prefix) {
 
     if (shelves?.length) {
       for (const row of shelves) {
+        // Skip tombstoned soft-deletes (and any leftover inactive names if is_active filter failed).
+        if (String(row.name || '').startsWith('del-')) continue
         const code = extractRackCode(row.name)
         if (code) codes.add(code)
       }
@@ -1008,13 +1010,103 @@ async function fetchRackCodesForPrefix(prefix) {
   return [...codes]
 }
 
+function tombstoneLabel(base, id) {
+  const safeBase = String(base || 'deleted')
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+  const suffix = String(id || crypto.randomUUID())
+    .replace(/-/g, '')
+    .slice(0, 8)
+  // Prefix with "del-" so extractRackCode never treats this as an active rack code.
+  return `del-${suffix}-${safeBase || 'rack'}`
+}
+
+/** Soft-deleted rows still occupy unique name/code slots — free them so codes can be reused. */
+async function releaseInactiveRackUnitCodes(locationId = null) {
+  try {
+    let query = supabase.from('rack_units').select('id,name,rack_code').eq('is_active', false)
+    if (locationId) query = query.eq('location_id', locationId)
+
+    const { data: inactiveUnits, error } = await withTimeout(query)
+    if (error) {
+      if (/rack_units|relation|schema cache/.test(error.message || '')) return
+      throw error
+    }
+
+    for (const unit of inactiveUnits || []) {
+      const alreadyTombstoned =
+        !unit.rack_code && String(unit.name || '').startsWith('del-')
+      if (alreadyTombstoned) continue
+
+      const { error: updateError } = await withTimeout(
+        supabase
+          .from('rack_units')
+          .update({
+            is_active: false,
+            rack_code: null,
+            name: tombstoneLabel(unit.rack_code || unit.name || 'rack', unit.id),
+          })
+          .eq('id', unit.id),
+      )
+      if (updateError && !/rack_units|relation|schema cache/.test(updateError.message || '')) {
+        throw updateError
+      }
+    }
+  } catch (_error) {
+    // Ignore when rack_units is unavailable.
+  }
+}
+
+/** Free unique shelf name/qr_slug slots held by soft-deleted shelves for a rack code. */
+async function releaseInactiveShelfSlots(locationId, rackCode = null) {
+  try {
+    let query = supabase
+      .from('shelves')
+      .select('id,name,qr_slug')
+      .eq('is_active', false)
+
+    if (locationId) query = query.eq('location_id', locationId)
+    if (rackCode) query = query.ilike('name', `${normalizeRackCode(rackCode)}%`)
+
+    const { data: inactiveShelves, error } = await withTimeout(query)
+    if (error) {
+      if (/is_active|column/.test(error.message || '')) return
+      throw error
+    }
+
+    for (const shelf of inactiveShelves || []) {
+      const alreadyTombstoned =
+        !shelf.qr_slug && String(shelf.name || '').startsWith('del-')
+      if (alreadyTombstoned) continue
+
+      const { error: updateError } = await withTimeout(
+        supabase
+          .from('shelves')
+          .update({
+            is_active: false,
+            qr_slug: null,
+            name: tombstoneLabel(shelf.name || 'shelf', shelf.id),
+          })
+          .eq('id', shelf.id),
+      )
+      if (updateError) throw updateError
+    }
+  } catch (_error) {
+    // Best-effort cleanup for reuse.
+  }
+}
+
 export async function getNextRackCodeForRoom(locationName, locationId = null) {
   const prefix = getRoomRackPrefix(locationName)
   if (!prefix) {
     throw new Error(`No rack code prefix configured for ${locationName || 'this room'}.`)
   }
 
+  await releaseInactiveRackUnitCodes(locationId)
   if (locationId) {
+    await releaseInactiveShelfSlots(locationId)
     await assignMissingRackCodes(locationId, locationName)
   }
 
@@ -1269,37 +1361,59 @@ export async function createRack({
     const totalShelves = Math.max(1, Math.min(Number(shelfCount) || 3, 5))
 
     try {
-      const normalizedCode = await allocateNextRackCode(locationName, locationId)
-      if (!normalizedCode) {
-        throw new Error(`Could not generate a rack code for ${locationName || 'this room'}.`)
-      }
+      const blockedCodes = new Set()
+      let rackUnit = null
+      let normalizedCode = await allocateNextRackCode(locationName, locationId)
+      const prefix = getRoomRackPrefix(locationName)
 
-      const { data: rackUnit, error: rackUnitError } = await withTimeout(
-        supabase
-          .from('rack_units')
-          .insert({
-            location_id: locationId,
-            name: normalizedCode,
-            rack_code: normalizedCode,
-          })
-          .select('id,name,rack_code,location_id,created_at')
-          .single(),
-      )
-
-      if (rackUnitError) {
-        if (rackUnitError.code === '23505') {
-          throw new Error('That rack code is already in use.')
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (!normalizedCode) {
+          throw new Error(`Could not generate a rack code for ${locationName || 'this room'}.`)
         }
+
+        const { data, error: rackUnitError } = await withTimeout(
+          supabase
+            .from('rack_units')
+            .insert({
+              location_id: locationId,
+              name: normalizedCode,
+              rack_code: normalizedCode,
+            })
+            .select('id,name,rack_code,location_id,created_at')
+            .single(),
+        )
+
+        if (!rackUnitError) {
+          rackUnit = data
+          break
+        }
+
+        if (rackUnitError.code === '23505') {
+          blockedCodes.add(normalizedCode)
+          await releaseInactiveRackUnitCodes(locationId)
+          await releaseInactiveShelfSlots(locationId, normalizedCode)
+          const existingCodes = await fetchRackCodesForPrefix(prefix)
+          normalizedCode = buildNextRackCode(prefix, [...existingCodes, ...blockedCodes])
+          continue
+        }
+
         throw rackUnitError
       }
+
+      if (!rackUnit) {
+        throw new Error('That rack code is already in use.')
+      }
+
+      await releaseInactiveShelfSlots(locationId, normalizedCode)
 
       const createdShelves = []
       for (let level = 1; level <= totalShelves; level += 1) {
         const shelfLabel = getDefaultShelfLabel(level, totalShelves)
-        const qrSlug = buildQrSlug(locationName, `${normalizedCode}-${shelfLabel}`)
+        let qrSlug = buildQrSlug(locationName, `${normalizedCode}-${shelfLabel}`)
+        const shelfName = `${normalizedCode} · ${shelfLabel}`
         const fullPayload = {
           location_id: locationId,
-          name: `${normalizedCode} · ${shelfLabel}`,
+          name: shelfName,
           qr_slug: qrSlug,
           rack_unit_id: rackUnit.id,
           shelf_level: level,
@@ -1307,7 +1421,7 @@ export async function createRack({
         }
         const legacyPayload = {
           location_id: locationId,
-          name: `${normalizedCode} · ${shelfLabel}`,
+          name: shelfName,
           qr_slug: qrSlug,
         }
 
@@ -1324,6 +1438,17 @@ export async function createRack({
               .from('shelves')
               .insert(legacyPayload)
               .select('id,name,qr_slug,location_id,created_at')
+              .single(),
+          ))
+        }
+        if (shelfError?.code === '23505') {
+          await releaseInactiveShelfSlots(locationId, normalizedCode)
+          qrSlug = `${qrSlug}-${crypto.randomUUID().slice(0, 6)}`
+          ;({ data: shelf, error: shelfError } = await withTimeout(
+            supabase
+              .from('shelves')
+              .insert({ ...fullPayload, qr_slug: qrSlug })
+              .select('id,name,qr_slug,location_id,created_at,rack_unit_id,shelf_level,shelf_label')
               .single(),
           ))
         }
@@ -1497,7 +1622,11 @@ export async function deleteRack({ rackUnitId, shelfId }) {
 
     if (targetRackUnitId) {
       const { data: unit, error: unitFetchError } = await withTimeout(
-        supabase.from('rack_units').select('id,location_id').eq('id', targetRackUnitId).maybeSingle(),
+        supabase
+          .from('rack_units')
+          .select('id,location_id,name,rack_code')
+          .eq('id', targetRackUnitId)
+          .maybeSingle(),
       )
       if (unitFetchError && !/rack_units|relation|schema cache/.test(unitFetchError.message || '')) {
         throw unitFetchError
@@ -1510,8 +1639,16 @@ export async function deleteRack({ rackUnitId, shelfId }) {
           await deactivateShelfRecord(shelf.id, shelf.location_id)
         }
 
+        // Clear code/name so unique(location_id, name) and rack_code indexes allow reuse.
         await withTimeout(
-          supabase.from('rack_units').update({ is_active: false }).eq('id', targetRackUnitId),
+          supabase
+            .from('rack_units')
+            .update({
+              is_active: false,
+              rack_code: null,
+              name: tombstoneLabel(unit.rack_code || unit.name || 'rack', unit.id),
+            })
+            .eq('id', targetRackUnitId),
         )
 
         if (unit.location_id) {
@@ -1537,8 +1674,23 @@ export async function deleteRack({ rackUnitId, shelfId }) {
     await deactivateShelfRecord(shelf.id, shelf.location_id)
 
     if (shelf.rack_unit_id) {
+      const { data: unit } = await withTimeout(
+        supabase
+          .from('rack_units')
+          .select('id,name,rack_code')
+          .eq('id', shelf.rack_unit_id)
+          .maybeSingle(),
+      ).catch(() => ({ data: null }))
+
       await withTimeout(
-        supabase.from('rack_units').update({ is_active: false }).eq('id', shelf.rack_unit_id),
+        supabase
+          .from('rack_units')
+          .update({
+            is_active: false,
+            rack_code: null,
+            name: tombstoneLabel(unit?.rack_code || unit?.name || 'rack', shelf.rack_unit_id),
+          })
+          .eq('id', shelf.rack_unit_id),
       )
     }
 
@@ -1566,8 +1718,19 @@ async function deactivateShelfRecord(shelfId, locationId) {
     // shelf_items may not exist on older databases
   }
 
+  const { data: shelfRow } = await withTimeout(
+    supabase.from('shelves').select('id,name').eq('id', shelfId).maybeSingle(),
+  ).catch(() => ({ data: null }))
+
   const { error: shelfUpdateError } = await withTimeout(
-    supabase.from('shelves').update({ is_active: false }).eq('id', shelfId),
+    supabase
+      .from('shelves')
+      .update({
+        is_active: false,
+        qr_slug: null,
+        name: tombstoneLabel(shelfRow?.name || 'shelf', shelfId),
+      })
+      .eq('id', shelfId),
   )
   if (shelfUpdateError) throw shelfUpdateError
 
